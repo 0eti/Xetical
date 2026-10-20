@@ -11,6 +11,8 @@
 - **Xetical** (c는 소문자): DesktopCal(중국산 바탕화면 달력)을 본뜬 **구글 캘린더·구글 할 일 바탕화면 달력**. Windows 전용, Python 3.13 + PySide6.
 - **위치:** `D:\Dev\Projects\XetiCal`. 폴더 이름은 원래 GoogleCal이었다.
 - **git:** 2026-10-21부터 git으로 관리한다. 공개 GitHub 저장소 https://github.com/0eti/Xetical (`main`).
+  - 공개 전에 개인정보를 지우려고 기록을 다시 썼다. 지우기 전 기록은 비공개 저장소 `0eti/Xetical-old`에 남아 있다(사용자가 웹에서 지우면 됨).
+  - 이 저장소는 공개다. 커밋하기 전에 개인정보(메일·캘린더 이름·프로젝트 번호 등)가 들어가지 않았는지 확인할 것.
   - 커밋 작성자는 저장소 로컬 설정(0eti, GitHub noreply 메일). `data/`, `.venv/`, `client_secret*.json`은 `.gitignore`로 뺐다.
   - 파일마다 줄끝이 다르다(CRLF/LF 섞임, 파일 하나 안에서는 같음). `.gitattributes`에서 `*.bat`만 CRLF로 고정.
 - **실행:** `Xetical.bat` (CRLF, ASCII 전용). 처음이면 `.venv`를 만들고 `requirements.txt`를 설치한 뒤 `pythonw main.pyw`를 실행한다.
