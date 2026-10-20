@@ -46,6 +46,14 @@ class ApiDisabledError(Exception):
         self.api = "Google Tasks API" if "tasks.googleapis.com" in url else "Google Calendar API"
 
 
+def is_transient(e):
+    """다시 보내면 될 구글 오류인가(서버 일시 장애·요청 한도 초과)."""
+    if not isinstance(e, HttpError):
+        return False
+    return e.resp.status in (429, 500, 502, 503, 504) or (
+        e.resp.status == 403 and b"ateLimitExceeded" in (e.content or b""))
+
+
 def is_holiday_calendar(cal_id):
     return cal_id.endswith("#holiday@group.v.calendar.google.com")
 
@@ -124,6 +132,7 @@ class GCal:
         self._creds = None
         self._svc = None
         self._event_colors = None
+        self._tz = None  # 기본 캘린더의 시간대 이름(예: Asia/Seoul)
 
     # ---------- 인증 ----------
     @staticmethod
@@ -209,12 +218,17 @@ class GCal:
             raise
 
     def _batch(self, requests):
-        """여러 요청을 50개씩 묶어 보낸다. 응답을 요청 순서대로 돌려주고, 실패가 있으면 첫 오류를 올린다.
-        이미 지워진 일정(404/410)을 고치거나 지우는 것은 성공으로 친다."""
+        """여러 요청을 50개씩 묶어 보낸다. 응답을 요청 순서대로 돌려준다.
+        이미 지워진 일정(404/410)을 고치거나 지우는 것, 이미 만들어진 일정(409)을 또 만드는 것은 성공으로 친다.
+        실패가 있으면 다시 보내면 될 오류를 먼저 올린다(그래야 보낼 편지함이 작업을 버리지 않고 다시 보낸다)."""
         errors, responses = [], {}
 
         def cb(req_id, resp, exc):
-            if exc is not None and not (isinstance(exc, HttpError) and exc.resp.status in (404, 410)):
+            if isinstance(exc, HttpError):
+                st, insert = exc.resp.status, requests[int(req_id)].method == "POST"
+                if (st in (404, 410) and not insert) or (st == 409 and insert):
+                    exc = None
+            if exc is not None:
                 errors.append(exc)
             responses[int(req_id)] = resp
         svc = self._service()
@@ -228,8 +242,9 @@ class GCal:
                 mapped = self._translate(e)
                 raise (mapped or e) from e
         if errors:
-            mapped = self._translate(errors[0])
-            raise (mapped or errors[0])
+            first = next((e for e in errors if is_transient(e)), errors[0])
+            mapped = self._translate(first)
+            raise (mapped or first)
         return [responses.get(i) for i in range(len(requests))]
 
     # ---------- 읽기 ----------
@@ -252,6 +267,8 @@ class GCal:
                     "writable": c.get("accessRole") in ("owner", "writer"),
                     "selected": bool(c.get("selected", False)),
                 })
+                if c.get("primary") and c.get("timeZone"):
+                    self._tz = c["timeZone"]
             page = r.get("nextPageToken")
             if not page:
                 break
@@ -373,17 +390,27 @@ class GCal:
         return _rrule_line(master.get("recurrence")), master.get("start", {})
 
     # ---------- 쓰기 ----------
-    @staticmethod
-    def _times(v):
+    def _zone(self):
+        """시간대 이름. 구글은 시간 반복 일정에 이것이 없으면 거절한다. 동기화 전이면 캘린더 설정에서 읽는다."""
+        if self._tz is None:
+            try:
+                self._tz = self._call(self._service().settings().get(setting="timezone")).get("value", "")
+            except HttpError:
+                self._tz = ""
+        return self._tz or None
+
+    def _times(self, v):
         if v["all_day"]:
             start = {"date": v["start"].isoformat(), "dateTime": None, "timeZone": None}
             end = {"date": (v["end"] + timedelta(days=1)).isoformat(), "dateTime": None, "timeZone": None}
         else:
-            start = {"dateTime": v["start"].astimezone().isoformat(), "date": None}
-            end = {"dateTime": v["end"].astimezone().isoformat(), "date": None}
+            tz = self._zone()
+            start = {"dateTime": v["start"].astimezone().isoformat(), "date": None, "timeZone": tz}
+            end = {"dateTime": v["end"].astimezone().isoformat(), "date": None, "timeZone": tz}
         return start, end
 
-    def _body(self, v, for_insert=False):
+    def _body(self, v, for_insert=False, reset_reminders=False):
+        """reset_reminders: 알림을 지웠을 때만 구글 기본 알림으로 되돌린다(휴대폰에서 건 알림은 건드리지 않는다)."""
         start, end = self._times(v)
         body = {
             "summary": v["title"], "description": v.get("description", ""), "location": v.get("location", ""),
@@ -392,34 +419,44 @@ class GCal:
         rem = google_reminders(v)
         if rem:
             body["reminders"] = rem
-        elif not for_insert:
+        elif reset_reminders:
             body["reminders"] = {"useDefault": True, "overrides": None}
         if for_insert:
             for k in ("start", "end"):
                 body[k] = {kk: vv for kk, vv in body[k].items() if vv is not None}
             if v.get("recurrence"):
                 body["recurrence"] = [v["recurrence"]]
+            if v.get("event_id"):  # 미리 정한 id: 다시 보내도 409로 막혀 두 번 만들어지지 않는다
+                body["id"] = v["event_id"]
         return body
 
     def create_event(self, v):
         """만든 일정의 id를 돌려준다(되돌리기·오프라인 대기에서 임시 id를 바꿔 끼우는 데 쓴다)."""
-        return self._call(self._service().events().insert(calendarId=v["calendar_id"], body=self._body(v, True)))["id"]
+        try:
+            return self._call(self._service().events().insert(calendarId=v["calendar_id"], body=self._body(v, True)))["id"]
+        except HttpError as e:
+            if e.resp.status == 409 and v.get("event_id"):  # 앞서 보낸 것이 이미 만들어졌다
+                return v["event_id"]
+            raise
 
     def update_event(self, ev, v, scope="one"):
-        """scope: one=이번만, following=이번과 이후, all=전체(반복 일정일 때만 의미가 있다)."""
+        """scope: one=이번만, following=이번과 이후, all=전체(반복 일정일 때만 의미가 있다).
+        v["recurrence"]: None=규칙 그대로, ""=반복 안 함, "RRULE:…"=새 규칙."""
         svc = self._service()
         if ev.recurring and scope == "all":
             return self._update_series(ev, v)
         if ev.recurring and scope == "following":
-            self._end_series_before(ev)
-            rule = v.get("recurrence") or self.get_rrule(ev)[0]
-            self.create_event(dict(v, recurrence=rrule_with_until(rule, None) if rule else ""))
+            old = self._end_series_before(ev)
+            rule = v.get("recurrence")
+            if rule is None or rule == old:  # 규칙을 그대로 두면 끝(UNTIL)은 지키고 남은 횟수(COUNT)만 다시 센다
+                rule = self._remaining_rule(ev, old) if old else ""
+            self.create_event(dict(v, recurrence=rule))
             return
         cal_id, ev_id = ev.calendar_id, ev.id
         if v["calendar_id"] != cal_id and not ev.recurring:
             moved = self._call(svc.events().move(calendarId=cal_id, eventId=ev_id, destination=v["calendar_id"]))
             cal_id, ev_id = v["calendar_id"], moved["id"]
-        body = self._body(v)
+        body = self._body(v, reset_reminders=bool(ev.alarm))
         if v.get("recurrence") and not ev.recurring:  # 단일 일정을 반복 일정으로
             body["recurrence"] = [v["recurrence"]]
         self._call(svc.events().patch(calendarId=cal_id, eventId=ev_id, body=body))
@@ -427,7 +464,7 @@ class GCal:
     def _update_series(self, ev, v):
         svc = self._service()
         master = self._call(svc.events().get(calendarId=ev.calendar_id, eventId=ev.recurring_event_id))
-        body = self._body(v)
+        body = self._body(v, reset_reminders=bool(ev.alarm))
         # 시작·끝은 원본 날짜를 기준으로, 인스턴스에서 바뀐 만큼만 옮긴다
         if v["all_day"] and "date" in master["start"]:
             ds = v["start"] - ev.start
@@ -439,11 +476,30 @@ class GCal:
             ms = datetime.fromisoformat(master["start"]["dateTime"]) + ds
             me = datetime.fromisoformat(master["end"]["dateTime"]) + de
             body["start"]["dateTime"], body["end"]["dateTime"] = ms.isoformat(), me.isoformat()
-        if v.get("recurrence"):
-            body["recurrence"] = [v["recurrence"]]
+        rule = v.get("recurrence")
+        if rule is not None:  # ""이면 반복을 없앤다
+            keep = [r for r in master.get("recurrence", []) if not r.upper().startswith("RRULE:")]
+            body["recurrence"] = keep + [rule] if rule else []
         self._call(svc.events().patch(calendarId=ev.calendar_id, eventId=ev.recurring_event_id, body=body))
 
+    def _remaining_rule(self, ev, rule):
+        """'이번과 이후'로 나눈 뒤쪽 규칙: UNTIL은 그대로 두고, COUNT는 앞쪽에서 이미 지나간 횟수만큼 뺀다."""
+        m = re.search(r"COUNT=(\d+)", rule, re.I)
+        if not m:
+            return rule
+        svc, used, page = self._service(), 0, None
+        before = _rfc3339(ev.start) if ev.all_day else ev.start.astimezone().isoformat()
+        while True:
+            r = self._call(svc.events().instances(calendarId=ev.calendar_id, eventId=ev.recurring_event_id,
+                                                  timeMax=before, showDeleted=True, pageToken=page, maxResults=2500))
+            used += len(r.get("items", []))
+            page = r.get("nextPageToken")
+            if not page:
+                break
+        return rule[:m.start(1)] + str(max(1, int(m.group(1)) - used)) + rule[m.end(1):]
+
     def _end_series_before(self, ev):
+        """반복 일정을 이 회차 앞에서 끝낸다. 자르기 전의 RRULE을 돌려준다."""
         svc = self._service()
         master = self._call(svc.events().get(calendarId=ev.calendar_id, eventId=ev.recurring_event_id))
         rule = _rrule_line(master.get("recurrence"))
@@ -455,6 +511,7 @@ class GCal:
         rec.append(rrule_with_until(rule, until))
         self._call(svc.events().patch(calendarId=ev.calendar_id, eventId=ev.recurring_event_id,
                                       body={"recurrence": rec}))
+        return rule
 
     def delete_event(self, ev, scope="one"):
         svc = self._service()
@@ -486,7 +543,7 @@ class GCal:
         if not reqs:
             return []
         responses = self._batch(reqs)
-        return [(r or {}).get("id", "") for op, r in zip(ops, responses) if op[0] == "create"]
+        return [op[2].get("event_id") or (r or {}).get("id", "") for op, r in zip(ops, responses) if op[0] == "create"]
 
     def move_event(self, ev, delta_days):
         """일정(또는 할 일)을 delta_days만큼 옮긴다. 반복 일정은 이 회차만 옮긴다."""
@@ -515,11 +572,6 @@ class GCal:
         self._call(svc.events().patch(calendarId=ev.calendar_id, eventId=ev.id, body={"attendees": attendees},
                                       sendUpdates="all"))
 
-    def insert_many(self, cal_id, values):
-        svc = self._service()
-        self._batch([svc.events().insert(calendarId=cal_id, body=self._body(v, True)) for v in values])
-
-
     # ---------- 할 일(Google Tasks) ----------
     def fetch_tasks(self, start, end):
         """마감일이 start~end 안에 있는 할 일. (목록들, 할 일 Event들, 상태) 상태: ok | scope | ('disabled', url) | error"""
@@ -542,7 +594,7 @@ class GCal:
                 page = None
                 while True:
                     r = self._call(svc.tasks().list(
-                        tasklist=tl["id"], showCompleted=True, showHidden=False, maxResults=100, pageToken=page,
+                        tasklist=tl["id"], showCompleted=True, showHidden=True, maxResults=100, pageToken=page,
                         dueMin=f"{start.isoformat()}T00:00:00.000Z", dueMax=f"{end.isoformat()}T00:00:00.000Z"))
                     for item in r.get("items", []):
                         if item.get("due") and not item.get("deleted"):

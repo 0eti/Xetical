@@ -68,7 +68,7 @@ class Event:
             "start": self.start, "end": self.end - timedelta(days=1) if self.all_day else self.end,
             "location": self.location, "description": self.description, "done": self.done,
             "text_color": self.text_color, "order": self.order, "line": self.line,
-            "alarm": self.alarm, "countdown": self.countdown, "recurrence": "",
+            "alarm": self.alarm, "countdown": self.countdown, "recurrence": None,  # None = 반복 규칙은 그대로
         }
 
     def sort_key(self):

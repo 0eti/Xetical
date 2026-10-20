@@ -6,6 +6,7 @@
 """
 import logging
 import socket
+import uuid
 from datetime import date, datetime
 
 import httplib2
@@ -14,7 +15,7 @@ from googleapiclient.errors import HttpError
 from PySide6.QtCore import QObject, QTimer, Signal
 
 from .config import OUTBOX_PATH, load_json, save_json
-from .gcal import ApiDisabledError, AuthError
+from .gcal import ApiDisabledError, AuthError, is_transient
 from .model import Event
 
 log = logging.getLogger("xetical")
@@ -62,10 +63,24 @@ def resolve(o, id_map):
 
 
 def is_offline(e):
-    """다시 시도하면 될 오류(인터넷 끊김·구글 서버 일시 장애)인가."""
+    """다시 시도하면 될 오류(인터넷 끊김·구글 서버 일시 장애·요청 한도 초과)인가."""
     if isinstance(e, HttpError):
-        return e.resp.status in (429, 500, 502, 503, 504)
+        return is_transient(e)
     return isinstance(e, (httplib2.HttpLib2Error, TransportError, socket.error, TimeoutError, ConnectionError))
+
+
+def assign_event_ids(op, args):
+    """새로 만들 구글 일정에 id를 미리 정해 붙이고 그 목록을 돌려준다(args는 encode한 사본).
+    다시 보내도 구글이 409(이미 있음)로 막아 주니 두 번 만들어지지 않고, 임시 id의 짝도 바로 알 수 있다."""
+    if op == "create_event":
+        values = [args[0]]
+    elif op == "apply_ops":
+        values = [o[2] for o in args[0] if o[0] == "create"]
+    else:
+        return []
+    for v in values:
+        v.setdefault("event_id", uuid.uuid4().hex)  # 구글 일정 id는 0-9a-v 글자만 쓸 수 있다
+    return [v["event_id"] for v in values]
 
 
 def run_job(gcal, job, id_map):
@@ -101,7 +116,11 @@ class Outbox(QObject):
         save_json(OUTBOX_PATH, {"jobs": self.jobs, "ids": self.id_map})
 
     def add(self, op, *args, tmps=(), label=""):
-        self.jobs.append({"op": op, "args": encode(list(args)), "tmps": list(tmps), "label": label})
+        args = encode(list(args))
+        for tmp, real in zip(tmps, assign_event_ids(op, args)):
+            if tmp:
+                self.id_map[tmp] = real
+        self.jobs.append({"op": op, "args": args, "tmps": list(tmps), "label": label})
         self._save()
         self.changed.emit()
         self.process()
@@ -118,8 +137,9 @@ class Outbox(QObject):
 
     def _done(self, job, created, err):
         self.busy = False
-        if isinstance(err, HttpError) and err.resp.status in (404, 410):
+        if isinstance(err, HttpError) and err.resp.status in (404, 410) and not job["op"].startswith("create"):
             err = None  # 이미 지워졌거나 없는 일정을 고치거나 지우려 한 것 → 할 일이 없으니 성공으로 친다
+            # (만들기가 404면 캘린더·목록이 없어진 것이라 실패로 알린다)
         if err is not None and (is_offline(err) or isinstance(err, (AuthError, ApiDisabledError))):
             self.retry.start()
             self.blocked.emit(err)

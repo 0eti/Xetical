@@ -1,7 +1,7 @@
 """② 실제 구글 연동 시험. 2027년 1월에 '[Xetical 테스트]' 일정·할 일을 만들어 시험하고 끝나면 모두 지운다."""
 import sys
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, ".")
@@ -135,6 +135,30 @@ try:
       g.delete_event(new_series[0], "all")
       _, evs, _, _ = mine()
       check("반복: 전체 삭제", not any(x.title.endswith("3회차부터") for x in evs))
+
+      # ---------- 시간 반복 일정(리뷰 A1·A2) ----------
+      ts = datetime(2027, 1, 4, 9, 0)  # 월요일 오전 9시(UTC로는 전날)
+      tid0 = g.create_event(val("시간 반복", D, all_day=False, start=ts, end=ts + timedelta(hours=1),
+                                recurrence="RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=4"))
+      _, evs, _, _ = mine()
+      ti = sorted([x for x in evs if x.recurring_event_id == tid0], key=lambda x: x.start)
+      check("A1 시간 반복 일정 만들기(시간대 포함, 4회)", len(ti) == 4 and ti[0].start == ts, len(ti))
+      g.update_event(ti[1], dict(ti[1].values(), title=f"{P} 시간 후반"), "following")
+      _, evs, _, _ = mine()
+      first = [x for x in evs if x.recurring_event_id == tid0]
+      later = sorted([x for x in evs if x.title.endswith("시간 후반")], key=lambda x: x.start)
+      check("A2 이후 수정: COUNT 4 → 앞 1회 + 뒤 3회(끝없이 늘지 않음)", len(first) == 1 and len(later) == 3
+            and all(x.recurring for x in later), (len(first), len(later)))
+      g.update_event(later[0], dict(later[0].values(), title=f"{P} 시간 단일", recurrence=""), "all")
+      _, evs, _, _ = mine()
+      single = [x for x in evs if x.title.endswith("시간 단일")]
+      check("A2 전체 + 반복 안 함: 하나만 남음", len(single) == 1 and not single[0].recurring, [(x.start, x.recurring) for x in single])
+      g.create_event(val("종료일", D, all_day=False, start=ts, end=ts + timedelta(hours=1),
+                         recurrence="RRULE:FREQ=DAILY;UNTIL=" + datetime(2027, 1, 6, 23, 59, 59).astimezone(
+                             timezone.utc).strftime("%Y%m%dT%H%M%SZ")))
+      _, evs, _, _ = mine()
+      days_ = sorted(x.start.date() for x in evs if x.title.endswith("종료일"))
+      check("B10 종료일 1/6이면 1/4·1/5·1/6 세 번(1/7 없음)", days_ == [date(2027, 1, 4), date(2027, 1, 5), date(2027, 1, 6)], days_)
 
       # ---------- 검색 ----------
       found = g.search([c for c in cals if c["id"] == CAL], "Xetical 테스트", *RANGE)

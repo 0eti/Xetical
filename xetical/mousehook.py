@@ -125,12 +125,30 @@ class ClickThrough(QObject):
         self._proc = HOOKPROC(self._callback)  # GC되지 않게 보관
         self._swallowing = set()                # 삼킨 버튼(눌림을 삼켰으면 뗌도 삼킨다)
         self._last_down = (0, 0, 0)             # 더블클릭 판정: (시각, x, y)
+        self._calls = 0                         # 지난 점검 뒤로 훅이 불린 횟수
+        self._cursor = None                     # 지난 점검 때 커서 위치
 
     def start(self):
         if not self.hook:
             self.hook = u.SetWindowsHookExW(WH_MOUSE_LL, self._proc, k.GetModuleHandleW(None), 0)
             if not self.hook:
                 log.warning("마우스 훅 설치 실패: %s", ctypes.get_last_error())
+            self._calls, self._cursor = 0, None
+
+    def check(self):
+        """Windows는 응답이 늦은 훅을 알리지 않고 떼어 버린다(LowLevelHooksTimeout). 그러면 통과 창인 달력이
+        아예 눌리지 않으니, 커서가 움직였는데 훅이 한 번도 불리지 않았으면 다시 건다. 몇 초마다 부른다."""
+        if not self.hook:
+            return
+        pt = wt.POINT()
+        u.GetCursorPos(ctypes.byref(pt))
+        cur = (pt.x, pt.y)
+        if self._calls == 0 and self._cursor is not None and cur != self._cursor:
+            log.warning("마우스 훅이 떨어져 다시 겁니다")
+            u.UnhookWindowsHookEx(self.hook)
+            self.hook = None
+            self.start()
+        self._calls, self._cursor = 0, cur
 
     def stop(self):
         if self.hook:
@@ -152,6 +170,7 @@ class ClickThrough(QObject):
         return bool(h) and _class(h) in DESKTOP_CLASSES
 
     def _callback(self, code, wparam, lparam):
+        self._calls += 1
         try:
             if code >= 0 and self.win.isVisible() and not self.win.adjusting:
                 info = MSLLHOOKSTRUCT.from_address(lparam)

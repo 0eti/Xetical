@@ -99,7 +99,7 @@ class App(QObject):
         self.store = EventStore()
         self.store.load_cache()
         self.cell_colors = load_json(CELLS_PATH, {})
-        self._syncing = self._sync_again = self._sync_after_outbox = False
+        self._syncing = self._sync_again = False
         self._logging_in = False
         self._fix_url = None  # 상태 줄을 클릭하면 열 해결 페이지
         self._last_sync = None
@@ -211,6 +211,7 @@ class App(QObject):
 
     def _ensure_attached(self):
         self.win.ensure_attached()
+        self.click_hook.check()
 
     # ---------- 메뉴 ----------
     @staticmethod
@@ -563,8 +564,7 @@ class App(QObject):
     def sync(self):
         if not self.gcal.has_token():
             return
-        if len(self.outbox):  # 보낼 변경이 남아 있으면 먼저 보내고 받는다(화면에 반영한 변경이 덮이지 않게)
-            self._sync_after_outbox = True
+        if len(self.outbox):  # 보낼 변경이 남아 있으면 먼저 보내고 받는다(다 보내면 drained에서 다시 부른다)
             self.outbox.process()
             return
         if self._syncing:
@@ -591,6 +591,10 @@ class App(QObject):
                 self.set_status("Google Calendar API가 꺼져 있음 — 여기를 클릭해 '사용' 누르기", True)
             else:
                 self.set_status("동기화 실패 (인터넷 연결 확인)")
+        elif len(self.outbox):
+            # 받는 동안 새 변경이 줄을 섰다. 이 결과에는 그 변경이 없어서 화면에 반영해 둔 것을 덮어 버리므로 버린다.
+            # (다 보내면 drained에서 다시 받는다)
+            self.win.cloud_state = "ok"
         else:
             calendars, events, holidays, rng, countdowns, tasks_status = res
             self.store.set(calendars, events, holidays, rng)
@@ -632,8 +636,6 @@ class App(QObject):
     def _on_outbox_drained(self):
         if self.win.status.startswith("오프라인"):
             self.set_status("")
-        if self._sync_after_outbox:
-            self._sync_after_outbox = False
         self.sync()
 
     def _on_outbox_blocked(self, err):
@@ -978,15 +980,25 @@ class App(QObject):
         QGuiApplication.clipboard().setText(ev.title)
         self.flash(f"복사: {ev.title}")
 
+    def _removable_selection(self):
+        """Delete·Ctrl+X 대상. 우클릭 메뉴처럼 '예정'과 읽기 전용 일정은 지울 수 없다."""
+        sel = self.win.selected_event
+        if sel is None:
+            return None
+        if sel.virtual or not (sel.writable or sel.task_list):
+            self.flash("예정 표시나 읽기 전용 일정은 지울 수 없습니다" if sel.virtual else "읽기 전용 일정은 지울 수 없습니다")
+            return None
+        return self._real(sel)
+
     def cut_selected(self):
-        ev = self._real(self.win.selected_event)
+        ev = self._removable_selection()
         if ev is None:
             return
         self.copy_selected()
         self.delete_event(ev)
 
     def delete_selected(self):
-        ev = self._real(self.win.selected_event)
+        ev = self._removable_selection()
         if ev is not None:
             self.delete_event(ev, confirm=True)
 

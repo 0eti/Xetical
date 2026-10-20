@@ -197,6 +197,14 @@ class CellEditor(QWidget):
         seen = set()
         b = self.edit.document().firstBlock()
         while b.isValid():
+            nxt = b.next()
+            ln = self._lines[b.userState()] if b.userState() >= 0 else None
+            if ln and not b.text() and nxt.isValid() and nxt.userState() < 0 and nxt.text() \
+                    and (ln.ev is None or ln.ev.title == nxt.text().strip()):
+                # 줄 맨 앞에서 Enter: Qt는 번호를 위쪽 빈 줄에 남기고 글자를 새 줄로 내린다 → 번호도 글자를 따라 내린다
+                nxt.setUserState(b.userState())
+                b.setUserState(-1)
+                self._apply(nxt)
             st = b.userState()
             if st < 0 or st in seen:  # 새 줄, 또는 줄 복사로 같은 번호가 둘 생긴 경우
                 self._lines.append(_Line())
@@ -294,14 +302,18 @@ class CellEditor(QWidget):
         alarm = ""
         if self.cfg["default_alarm_on"] and self.cfg["default_alarm_lines"]:
             alarm = f"{self.cfg['default_alarm_time']}|{','.join(str(x) for x in self.cfg['default_alarm_days'])}"
+        # 줄을 넣거나 빼거나 옮겼을 때만 순서 번호를 새로 매긴다(열었다 닫기만 하면 구글에 쓰지 않는다)
+        reordered = [ln["ev"].id if ln["ev"] else None for ln in lines] != [e.id for e in self.line_events]
         for i, ln in enumerate(lines):
             ev = ln["ev"]
-            props = {"done": ln["done"], "text_color": ln["color"], "order": i, "line": True}
+            props = {"done": ln["done"], "text_color": ln["color"], "order": i if reordered else ev.order if ev else i,
+                     "line": True}
             if ev:
                 renamed = ev.title != ln["text"]
                 if ev.recurring and renamed:  # 반복 일정 이름 바꾸기는 범위를 묻는다
                     ask.append(("rename", ev, ln["text"]))
-                if (ev.done, ev.text_color or "", ev.order) != (ln["done"], ln["color"], i) or (renamed and not ev.recurring):
+                if (ev.done, ev.text_color or "", ev.order) != (ln["done"], ln["color"], props["order"]) \
+                        or (renamed and not ev.recurring):
                     props.update(alarm=ev.alarm, countdown=ev.countdown, line=ev.line or not ev.recurring)
                     body = {"extendedProperties": {"private": event_props(props)}}
                     if not ev.recurring:

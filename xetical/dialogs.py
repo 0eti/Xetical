@@ -2,7 +2,7 @@
 (달력 창의 자식이 되면 함께 바탕화면 아래에 깔려 버린다)."""
 import calendar as pycal
 import webbrowser
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 
 from PySide6.QtCore import QDate, Qt, QTime
 from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
@@ -209,8 +209,12 @@ class RepeatEditor(QGroupBox):
             self.count.setValue(int(p["COUNT"]))
         elif "UNTIL" in p:
             self.end_kind.setCurrentIndex(2)
-            u = p["UNTIL"][:8]
-            self.until.setDate(QDate(int(u[:4]), int(u[4:6]), int(u[6:8])))
+            u = p["UNTIL"]
+            if u.upper().endswith("Z") and len(u) >= 16:  # UTC 시각 → 이 PC 날짜
+                d = datetime.strptime(u[:15].upper(), "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc).astimezone()
+                self.until.setDate(QDate(d.year, d.month, d.day))
+            else:
+                self.until.setDate(QDate(int(u[:4]), int(u[4:6]), int(u[6:8])))
 
     def rrule(self, start, all_day):
         if not self.dirty and self.loaded:  # 손대지 않았으면 원래 규칙 그대로
@@ -238,7 +242,11 @@ class RepeatEditor(QGroupBox):
             parts += f";COUNT={self.count.value()}"
         elif end == "until":
             u = from_qdate(self.until.date())
-            parts += f";UNTIL={u:%Y%m%d}" if all_day else f";UNTIL={u:%Y%m%d}T235959Z"
+            if all_day:
+                parts += f";UNTIL={u:%Y%m%d}"
+            else:  # 시간 일정의 UNTIL은 UTC다: 그날 밤 23:59:59(이 PC 시각)를 UTC로 바꿔 적는다
+                end = datetime.combine(u, time(23, 59, 59)).astimezone(timezone.utc)
+                parts += f";UNTIL={end:%Y%m%dT%H%M%SZ}"
         return "RRULE:" + parts
 
 
