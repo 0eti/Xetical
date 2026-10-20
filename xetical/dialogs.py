@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (QButtonGroup, QCalendarWidget, QCheckBox, QComboB
                                QWidget)
 
 from .gcal import is_holiday_calendar
-from .model import COUNTDOWN_TYPES
+from .model import COUNTDOWN_TYPES, KEEP, NO_REPEAT
 from .widgets import ColorButton, confirm
 
 WD_CODES = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"]
@@ -217,12 +217,12 @@ class RepeatEditor(QGroupBox):
                 self.until.setDate(QDate(int(u[:4]), int(u[4:6]), int(u[6:8])))
 
     def rrule(self, start, all_day):
-        """None = 손대지 않았으니 규칙 그대로, "" = 반복 안 함, "RRULE:…" = 새 규칙."""
+        """KEEP = 손대지 않았으니 규칙 그대로, NO_REPEAT = 반복 안 함, "RRULE:…" = 새 규칙."""
         if not self.dirty:
-            return None
+            return KEEP
         k = self.kind.currentData()
         if k == "none":
-            return ""
+            return NO_REPEAT
         if k == "keep":
             return self.raw
         wd = WD_CODES[start.weekday()]
@@ -537,7 +537,7 @@ class EventDialog(QDialog):
 
     def recurrence_changed(self):
         rule = self.values()["recurrence"]
-        return rule is not None and rule != (self.orig_rrule or "")
+        return rule is not KEEP and rule != (self.orig_rrule or NO_REPEAT)
 
     def _save(self):
         v = self.values()

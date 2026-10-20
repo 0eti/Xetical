@@ -6,6 +6,11 @@ from datetime import date, datetime, timedelta
 
 from .config import CACHE_PATH
 
+# 일정 편집 값 v["recurrence"]의 약속(보낼 편지함에 JSON으로 저장되므로 값은 None·""로 둔다)
+KEEP = None       # 반복 규칙 그대로(모르거나 손대지 않음)
+NO_REPEAT = ""    # 반복 안 함(사용자가 직접 고름)
+# 그 밖의 "RRULE:…" 문자열 = 새 규칙
+
 COUNTDOWN_TYPES = {"countdown": "카운트다운", "birthday": "생일", "memorial": "기념일", "festival": "제전", "exam": "시험"}
 
 
@@ -68,7 +73,7 @@ class Event:
             "start": self.start, "end": self.end - timedelta(days=1) if self.all_day else self.end,
             "location": self.location, "description": self.description, "done": self.done,
             "text_color": self.text_color, "order": self.order, "line": self.line,
-            "alarm": self.alarm, "countdown": self.countdown, "recurrence": None,  # None = 반복 규칙은 그대로
+            "alarm": self.alarm, "countdown": self.countdown, "recurrence": KEEP,
         }
 
     def sort_key(self):

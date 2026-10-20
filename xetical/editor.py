@@ -315,9 +315,11 @@ class CellEditor(QWidget):
                 renamed = ev.title != ln["text"]
                 if ev.recurring and renamed:  # 반복 일정 이름 바꾸기는 범위를 묻는다
                     ask.append(("rename", ev, ln["text"]))
-                if (ev.done, ev.text_color or "", ev.order) != (ln["done"], ln["color"], props["order"]) \
-                        or (renamed and not ev.recurring):
-                    props.update(alarm=ev.alarm, countdown=ev.countdown, line=ev.line or not ev.recurring)
+                own = (ev.done, ev.text_color or "") != (ln["done"], ln["color"]) or (renamed and not ev.recurring)
+                if own or ev.order != props["order"]:
+                    # 그 줄을 직접 고쳤을 때만 '줄'로 표시한다. 순서 번호만 바뀐 일정(휴대폰에서 만든 약속 등)이
+                    # 줄이 되면 '미완료 자동 연기'가 오늘로 옮겨 버린다.
+                    props.update(alarm=ev.alarm, countdown=ev.countdown, line=ev.line or (own and not ev.recurring))
                     body = {"extendedProperties": {"private": event_props(props)}}
                     if not ev.recurring:
                         body["summary"] = ln["text"]

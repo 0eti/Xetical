@@ -16,7 +16,7 @@ from PySide6.QtCore import QObject, QTimer, Signal
 
 from .config import OUTBOX_PATH, load_json, save_json
 from .gcal import ApiDisabledError, AuthError, is_transient
-from .model import Event
+from .model import KEEP, NO_REPEAT, Event
 
 log = logging.getLogger("xetical")
 RETRY_MS = 60_000
@@ -86,11 +86,14 @@ def assign_event_ids(op, args):
 
 
 def upgrade_job(job):
-    """예전(2026-10-21 전) 작업: 일정 수정 값의 recurrence ""는 '규칙 그대로'였다. 지금 약속(None)으로 바꾼다."""
+    """예전(2026-10-21 전) 작업을 지금 약속에 맞춘다.
+    - 일정 수정 값의 recurrence ""는 그때 '규칙 그대로'였다 → KEEP
+    - '이번과 이후'에 미리 정한 id가 없다 → 붙여서 다시 보내도 두 번 만들어지지 않게"""
     if job.get("v", 1) < 2 and job["op"] == "update_event":
         v = job["args"][1]
-        if isinstance(v, dict) and v.get("recurrence") == "":
-            v["recurrence"] = None
+        if isinstance(v, dict) and v.get("recurrence") == NO_REPEAT:
+            v["recurrence"] = KEEP
+        assign_event_ids(job["op"], job["args"])
     job["v"] = 2
     return job
 

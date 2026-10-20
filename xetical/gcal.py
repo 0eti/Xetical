@@ -11,7 +11,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from .config import CLIENT_SECRET_PATH, TOKEN_PATH
-from .model import Event
+from .model import KEEP, NO_REPEAT, Event
 
 SCOPES = [
     "https://www.googleapis.com/auth/calendar.readonly",
@@ -79,6 +79,16 @@ def _rfc3339(d):
 
 def _rrule_line(recurrence):
     return next((r for r in recurrence or [] if r.upper().startswith("RRULE:")), "")
+
+
+def _is_first(ev, master):
+    """반복 일정의 첫 회차인가(원본의 시작과 같거나 앞)."""
+    ms = master.get("start", {})
+    if "date" in ms:
+        return ev.all_day and ev.start <= date.fromisoformat(ms["date"])
+    if "dateTime" in ms:
+        return not ev.all_day and ev.start <= _local(ms["dateTime"])
+    return False
 
 
 def rrule_with_until(rule, until):
@@ -441,20 +451,27 @@ class GCal:
 
     def update_event(self, ev, v, scope="one"):
         """scope: one=이번만, following=이번과 이후, all=전체(반복 일정일 때만 의미가 있다).
-        v["recurrence"]: None=규칙 그대로, ""=반복 안 함, "RRULE:…"=새 규칙."""
+        v["recurrence"]: KEEP(None)=규칙 그대로, NO_REPEAT("")=반복 안 함, "RRULE:…"=새 규칙."""
         svc = self._service()
         if ev.recurring and scope == "all":
             return self._update_series(ev, v)
         if ev.recurring and scope == "following":
             master = self._call(svc.events().get(calendarId=ev.calendar_id, eventId=ev.recurring_event_id))
+            if _is_first(ev, master):  # 첫 회차부터 = 전체(앞쪽을 자르면 빈 반복이 남는다)
+                return self._update_series(ev, v)
             old = _rrule_line(master.get("recurrence"))
             rule = v.get("recurrence")
-            if rule is None or rule == old:  # 규칙을 그대로 두면 끝(UNTIL)은 지키고 남은 횟수(COUNT)만 다시 센다
-                rule = self._remaining_rule(ev, old) if old else ""
+            if rule is KEEP or rule == old:  # 규칙을 그대로 두면 끝(UNTIL)은 지키고 남은 횟수(COUNT)만 다시 센다
+                rule = self._remaining_rule(ev, old) if old else NO_REPEAT
             # 뒤쪽 반복을 먼저 만들고(미리 정한 id라 다시 보내도 409로 막힌다) 그다음 앞쪽을 자른다.
             # 거꾸로 하면 자른 직후 끊겼을 때 다시 보내면서 잘린 규칙을 원래 규칙으로 읽게 된다.
-            self.create_event(dict(v, recurrence=rule))
-            self._end_series_before(ev, master)
+            new_id = self.create_event(dict(v, recurrence=rule))
+            try:
+                self._end_series_before(ev, master)
+            except HttpError as e:
+                if not is_transient(e):  # 앞쪽을 자를 수 없으면(남이 만든 반복 등) 뒤쪽을 지워 두 벌이 남지 않게 한다
+                    self._call(svc.events().delete(calendarId=v["calendar_id"], eventId=new_id))
+                raise
             return
         cal_id, ev_id = ev.calendar_id, ev.id
         if v["calendar_id"] != cal_id and not ev.recurring:
@@ -481,7 +498,7 @@ class GCal:
             me = datetime.fromisoformat(master["end"]["dateTime"]) + de
             body["start"]["dateTime"], body["end"]["dateTime"] = ms.isoformat(), me.isoformat()
         rule = v.get("recurrence")
-        if rule is not None:  # ""이면 반복을 없앤다
+        if rule is not KEEP:  # NO_REPEAT("")이면 반복을 없앤다
             keep = [r for r in master.get("recurrence", []) if not r.upper().startswith("RRULE:")]
             body["recurrence"] = keep + [rule] if rule else []
         self._call(svc.events().patch(calendarId=ev.calendar_id, eventId=ev.recurring_event_id, body=body))
@@ -522,7 +539,11 @@ class GCal:
         if ev.recurring and scope == "all":
             self._call(svc.events().delete(calendarId=ev.calendar_id, eventId=ev.recurring_event_id))
         elif ev.recurring and scope == "following":
-            self._end_series_before(ev)
+            master = self._call(svc.events().get(calendarId=ev.calendar_id, eventId=ev.recurring_event_id))
+            if _is_first(ev, master):  # 첫 회차부터 지우기 = 전체 지우기
+                self._call(svc.events().delete(calendarId=ev.calendar_id, eventId=ev.recurring_event_id))
+            else:
+                self._end_series_before(ev, master)
         else:
             self._call(svc.events().delete(calendarId=ev.calendar_id, eventId=ev.id))
 

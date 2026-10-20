@@ -453,5 +453,64 @@ new_job = {"op": "update_event", "args": J.encode([inst, dict(vals(), recurrence
 J.upgrade_job(new_job)
 check("R7 지금 작업의 \"\"(반복 안 함)는 그대로", new_job["args"][1]["recurrence"] == "")
 
+# ================================================================ 최종 리뷰(2026-10-21) F1~F4
+# ---------- F1: 순서 번호만 바뀐 일정은 '줄'로 바꾸지 않음 ----------
+D2 = T + timedelta(days=2)
+a.store.events += [Event("p1", "me", "치과", D2, D2 + timedelta(days=1), True),
+                   Event("l1", "me", "우유", D2, D2 + timedelta(days=1), True, line=True)]
+a.store.reindex()
+ed4 = CellEditor(a.cfg, a.store, D2, QRect(0, 0, 160, 120), "me", [])
+c = ed4.edit.textCursor()
+c.movePosition(QTextCursor.Start)
+ed4.edit.setTextCursor(c)
+ed4.toggle_done()  # 첫 줄('우유')만 완료
+ops4, _l, _a = ed4.collect()
+priv = {op[2]: op[3]["extendedProperties"]["private"] for op in ops4 if op[0] == "patch"}
+check("F1 다른 줄만 고쳐도 휴대폰 일정은 줄 표시 없이 순서만", priv.get("p1", {}).get("xeticalLine") == ""
+      and priv.get("p1", {}).get("xeticalOrder") == "1", priv)
+check("F1 직접 고친 줄은 그대로 줄", priv.get("l1", {}).get("xeticalLine") == "1" and priv["l1"]["xeticalDone"] == "1", priv)
+ed4.close()
+
+# ---------- F2: 앞쪽을 자를 수 없으면 만든 뒤쪽을 지움 ----------
+g, svc = fresh()
+svc.fail = {"events.patch": 403}
+try:
+    g.update_event(inst, vals(event_id="ddd444"), "following")
+    raised = False
+except HttpError:
+    raised = True
+deleted = [kw.get("eventId") for k, kw in svc.log if k == "events.delete"]
+check("F2 자르기가 거절되면(403) 만든 뒤쪽 반복을 지우고 실패로 올림", raised and deleted == ["ddd444"], (raised, deleted))
+g, svc = fresh()
+svc.fail = {"events.patch": 503}
+try:
+    g.update_event(inst, vals(event_id="eee555"), "following")
+except HttpError:
+    pass
+check("F2 잠깐 장애(503)면 지우지 않음(다시 보내면 409로 이어서)", not [k for k, _ in svc.log if k == "events.delete"])
+
+# ---------- F3: 첫 회차부터 = 전체 ----------
+g, svc = fresh()
+first_ev = Event("i0", "me", "운동", datetime(2026, 11, 2, 10, 0), datetime(2026, 11, 2, 11, 0), False,
+                 recurring=True, recurring_event_id="m1")
+svc.master["start"] = {"dateTime": first_ev.start.astimezone().isoformat()}
+g.update_event(first_ev, vals(title="수영", start=first_ev.start, end=first_ev.end), "following")
+check("F3 첫 회차에서 '이후' 수정 = 전체 수정(새 반복 안 만들고 원본을 고침)",
+      not svc.bodies("events.insert") and any(kw.get("eventId") == "m1" and kw["body"].get("summary") == "수영"
+                                              for k, kw in svc.log if k == "events.patch"), svc.log)
+g, svc = fresh()
+svc.master["start"] = {"dateTime": first_ev.start.astimezone().isoformat()}
+g.delete_event(first_ev, "following")
+check("F3 첫 회차에서 '이후' 삭제 = 전체 삭제", [kw.get("eventId") for k, kw in svc.log if k == "events.delete"] == ["m1"])
+g, svc = fresh()
+g.delete_event(inst, "following")
+check("F3 중간 회차에서 '이후' 삭제는 앞쪽만 남김", not [k for k, _ in svc.log if k == "events.delete"]
+      and "UNTIL=" in svc.master["recurrence"][-1])
+
+# ---------- F4: 예전 '이후' 작업에도 id ----------
+old_f = {"op": "update_event", "args": J.encode([inst, dict(vals(), recurrence=""), "following"]), "tmps": [], "label": "x"}
+J.upgrade_job(old_f)
+check("F4 예전 '이후' 작업에 id를 붙임", len(old_f["args"][1].get("event_id", "")) == 32 and old_f["args"][1]["recurrence"] is None)
+
 print(f"\n{sum(ok for _, ok in results)}/{len(results)} 통과")
 a.shutdown() if hasattr(a, "shutdown") else None
