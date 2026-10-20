@@ -1,0 +1,141 @@
+"""구글에 보낼 변경을 줄 세워 보내는 '보낼 편지함'.
+
+- 인터넷이 끊겨 있으면 변경을 data/outbox.json에 보관했다가, 연결되면 순서대로 다시 보낸다.
+- 화면에는 먼저 반영하려고 새 일정에 'tmp-N' 임시 id를 붙인다. 구글이 진짜 id를 돌려주면
+  id_map에 적어 두고, 뒤에 오는 작업(수정·삭제·되돌리기)에 들어 있는 임시 id를 진짜 id로 바꿔 보낸다.
+"""
+import logging
+import socket
+from datetime import date, datetime
+
+import httplib2
+from google.auth.exceptions import TransportError
+from googleapiclient.errors import HttpError
+from PySide6.QtCore import QObject, QTimer, Signal
+
+from .config import OUTBOX_PATH, load_json, save_json
+from .gcal import ApiDisabledError, AuthError
+from .model import Event
+
+log = logging.getLogger("xetical")
+RETRY_MS = 60_000
+
+
+# ---------- 직렬화 (날짜·Event를 JSON으로) ----------
+def encode(o):
+    if isinstance(o, Event):
+        return {"$e": o.to_json()}
+    if isinstance(o, datetime):
+        return {"$t": o.isoformat()}
+    if isinstance(o, date):
+        return {"$d": o.isoformat()}
+    if isinstance(o, dict):
+        return {k: encode(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [encode(v) for v in o]
+    return o
+
+
+def decode(o):
+    if isinstance(o, dict):
+        if "$e" in o:
+            return Event.from_json(o["$e"])
+        if "$t" in o:
+            return datetime.fromisoformat(o["$t"])
+        if "$d" in o:
+            return date.fromisoformat(o["$d"])
+        return {k: decode(v) for k, v in o.items()}
+    if isinstance(o, list):
+        return [decode(v) for v in o]
+    return o
+
+
+def resolve(o, id_map):
+    """구조 안의 임시 id 문자열을 진짜 id로 바꾼다."""
+    if isinstance(o, str):
+        return id_map.get(o, o)
+    if isinstance(o, dict):
+        return {k: resolve(v, id_map) for k, v in o.items()}
+    if isinstance(o, list):
+        return [resolve(v, id_map) for v in o]
+    return o
+
+
+def is_offline(e):
+    """다시 시도하면 될 오류(인터넷 끊김·구글 서버 일시 장애)인가."""
+    if isinstance(e, HttpError):
+        return e.resp.status in (429, 500, 502, 503, 504)
+    return isinstance(e, (httplib2.HttpLib2Error, TransportError, socket.error, TimeoutError, ConnectionError))
+
+
+def run_job(gcal, job, id_map):
+    """작업 스레드에서 실행. 새로 만든 항목들의 진짜 id 목록을 돌려준다."""
+    args = decode(resolve(job["args"], id_map))
+    result = getattr(gcal, job["op"])(*args)
+    if isinstance(result, list):
+        return result
+    return [result] if isinstance(result, str) else []
+
+
+class Outbox(QObject):
+    changed = Signal()            # 대기 개수가 바뀜
+    drained = Signal()            # 다 보냄
+    blocked = Signal(object)      # 보내지 못하고 멈춤(오류 객체)
+    failed = Signal(str, object)  # 한 작업이 거절당해 버림(작업 이름, 오류)
+
+    def __init__(self, gcal, worker):
+        super().__init__()
+        self.gcal, self.worker = gcal, worker
+        data = load_json(OUTBOX_PATH, {})
+        self.jobs = data.get("jobs", [])
+        self.id_map = data.get("ids", {})
+        self.busy = False
+        self.retry = QTimer(self, singleShot=True, interval=RETRY_MS, timeout=self.process)
+
+    def __len__(self):
+        return len(self.jobs)
+
+    def _save(self):
+        if len(self.id_map) > 500:  # 오래된 짝은 버린다
+            self.id_map = dict(list(self.id_map.items())[-300:])
+        save_json(OUTBOX_PATH, {"jobs": self.jobs, "ids": self.id_map})
+
+    def add(self, op, *args, tmps=(), label=""):
+        self.jobs.append({"op": op, "args": encode(list(args)), "tmps": list(tmps), "label": label})
+        self._save()
+        self.changed.emit()
+        self.process()
+
+    def real_id(self, any_id):
+        return self.id_map.get(any_id, any_id)
+
+    def process(self):
+        if self.busy or not self.jobs:
+            return
+        self.busy = True
+        job = self.jobs[0]
+        self.worker.submit(run_job, self.gcal, job, dict(self.id_map), callback=lambda r, e: self._done(job, r, e))
+
+    def _done(self, job, created, err):
+        self.busy = False
+        if isinstance(err, HttpError) and err.resp.status in (404, 410):
+            err = None  # 이미 지워졌거나 없는 일정을 고치거나 지우려 한 것 → 할 일이 없으니 성공으로 친다
+        if err is not None and (is_offline(err) or isinstance(err, (AuthError, ApiDisabledError))):
+            self.retry.start()
+            self.blocked.emit(err)
+            return
+        if self.jobs and self.jobs[0] is job:
+            self.jobs.pop(0)
+        if err is not None:
+            log.error("변경을 보내지 못해 버림: %s", job.get("label") or job["op"], exc_info=err)
+            self.failed.emit(job.get("label") or job["op"], err)
+        else:
+            for tmp, real in zip(job.get("tmps", []), created or []):
+                if tmp and real:
+                    self.id_map[tmp] = real
+        self._save()
+        self.changed.emit()
+        if self.jobs:
+            self.process()
+        else:
+            self.drained.emit()

@@ -1,0 +1,601 @@
+"""Google Calendar API 연동. 모든 메서드는 블로킹이므로 작업 스레드에서만 호출한다."""
+import json
+import re
+from datetime import date, datetime, time, timedelta, timezone
+
+from google.auth.exceptions import RefreshError
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
+from .config import CLIENT_SECRET_PATH, TOKEN_PATH
+from .model import Event
+
+SCOPES = [
+    "https://www.googleapis.com/auth/calendar.readonly",
+    "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/tasks",
+]
+TASKS_SCOPE = SCOPES[-1]
+TASK_COLOR = "#4285f4"
+
+# DesktopCal '휴가 지역'에 대응하는 구글 공휴일 캘린더(이름은 한국어로 받는다)
+HOLIDAY_REGIONS = {
+    "south_korea": "대한민국", "usa": "미국", "japanese": "일본", "china": "중국", "taiwan": "대만",
+    "hong_kong": "홍콩", "uk": "영국", "german": "독일", "french": "프랑스", "canadian": "캐나다",
+    "australian": "호주", "vietnamese": "베트남", "indonesian": "인도네시아", "singapore": "싱가포르",
+}
+
+# DesktopCal식 속성을 담는 extendedProperties.private 키
+P_DONE, P_COLOR, P_ORDER, P_LINE, P_ALARM, P_COUNTDOWN, P_CD = (
+    "xeticalDone", "xeticalColor", "xeticalOrder", "xeticalLine", "xeticalAlarm", "xeticalCountdown", "xeticalCD")
+
+
+class AuthError(Exception):
+    """로그인이 필요하거나 토큰이 만료/취소됨."""
+
+
+class ApiDisabledError(Exception):
+    """구글 클라우드 프로젝트에서 Google Calendar API가 사용 설정되지 않음."""
+
+    def __init__(self, url):
+        super().__init__("Google API가 꺼져 있습니다.")
+        self.url = url
+        self.api = "Google Tasks API" if "tasks.googleapis.com" in url else "Google Calendar API"
+
+
+def is_holiday_calendar(cal_id):
+    return cal_id.endswith("#holiday@group.v.calendar.google.com")
+
+
+def holiday_calendar_id(region):
+    return f"ko.{region}#holiday@group.v.calendar.google.com"
+
+
+def validate_client_secret(path):
+    data = json.loads(open(path, encoding="utf-8").read())
+    if "installed" not in data:
+        raise ValueError("데스크톱 앱 유형의 OAuth 클라이언트 JSON이 아닙니다.\n"
+                         "(애플리케이션 유형을 '데스크톱 앱'으로 만들어야 합니다)")
+
+
+def _local(s):
+    return datetime.fromisoformat(s).astimezone().replace(tzinfo=None)
+
+
+def _rfc3339(d):
+    return datetime.combine(d, time.min).astimezone().isoformat()
+
+
+def _rrule_line(recurrence):
+    return next((r for r in recurrence or [] if r.upper().startswith("RRULE:")), "")
+
+
+def rrule_with_until(rule, until):
+    """RRULE에서 COUNT/UNTIL을 지우고 새 UNTIL을 붙인다(until=None이면 무기한)."""
+    parts = [p for p in rule[6:].split(";") if p and not p.upper().startswith(("COUNT=", "UNTIL="))]
+    if until:
+        parts.append(f"UNTIL={until}")
+    return "RRULE:" + ";".join(parts)
+
+
+def event_props(v):
+    """편집 값(dict) → extendedProperties.private (빈 문자열 = 해제)."""
+    return {
+        P_DONE: "1" if v.get("done") else "",
+        P_COLOR: v.get("text_color") or "",
+        P_ORDER: str(v.get("order", 0) or 0),
+        P_LINE: "1" if v.get("line") else "",
+        P_ALARM: v.get("alarm") or "",
+        P_COUNTDOWN: v.get("countdown") or "",
+        P_CD: "1" if v.get("countdown") else "",  # 카운트다운만 골라 받기 위한 표시
+    }
+
+
+def google_reminders(v):
+    """알림 설정을 구글 팝업 알림으로도 걸어 휴대폰에서도 울리게 한다(표현 가능한 것만)."""
+    alarm = v.get("alarm")
+    if not alarm:
+        return None
+    try:
+        hm, adv = (alarm.split("|") + [""])[:2]
+        h, m = (int(x) for x in hm.split(":"))
+        days = [int(x) for x in adv.split(",") if x.strip()] or [0]
+    except ValueError:
+        return None
+    mins = []
+    for d in days:
+        if v["all_day"]:
+            minutes = d * 1440 - (h * 60 + m)  # 구글 종일 일정 알림은 '당일 0시 기준 몇 분 전'
+        else:
+            start = v["start"]
+            fire = datetime.combine(start.date() - timedelta(days=d), time(h, m))
+            minutes = int((start - fire).total_seconds() // 60)
+        if 0 <= minutes <= 40320:
+            mins.append(minutes)
+    overrides = [{"method": "popup", "minutes": x} for x in sorted(set(mins))[:5]]
+    return {"useDefault": False, "overrides": overrides} if overrides else None
+
+
+class GCal:
+    def __init__(self):
+        self._creds = None
+        self._svc = None
+        self._event_colors = None
+
+    # ---------- 인증 ----------
+    @staticmethod
+    def has_client_secret():
+        return CLIENT_SECRET_PATH.exists()
+
+    @staticmethod
+    def has_token():
+        return TOKEN_PATH.exists()
+
+    def login(self):
+        flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRET_PATH), SCOPES)
+        creds = flow.run_local_server(
+            port=0, open_browser=True, timeout_seconds=300,
+            authorization_prompt_message="",
+            success_message="Xetical 로그인 완료! 이 탭은 닫아도 됩니다.",
+        )
+        if not creds or not creds.valid:
+            raise AuthError("로그인이 완료되지 않았습니다.")
+        TOKEN_PATH.write_text(creds.to_json(), "utf-8")
+        self._creds, self._svc = creds, None
+        return True
+
+    def logout(self):
+        TOKEN_PATH.unlink(missing_ok=True)
+        self._creds = self._svc = None
+
+    def _service(self):
+        if self._creds is None:
+            if not TOKEN_PATH.exists():
+                raise AuthError("로그인이 필요합니다.")
+            self._creds = Credentials.from_authorized_user_file(str(TOKEN_PATH))
+        if not self._creds.valid:
+            if not self._creds.refresh_token:
+                raise AuthError("로그인이 필요합니다.")
+            try:
+                self._creds.refresh(Request())
+            except RefreshError as e:
+                self._creds = self._svc = None
+                raise AuthError("로그인이 만료되었습니다. 다시 로그인해 주세요.") from e
+            TOKEN_PATH.write_text(self._creds.to_json(), "utf-8")
+        if self._svc is None:
+            self._svc = build("calendar", "v3", credentials=self._creds, cache_discovery=False)
+            self._tasks_svc = None
+        return self._svc
+
+    def _tasks(self):
+        self._service()  # 로그인·토큰 갱신
+        if getattr(self, "_tasks_svc", None) is None:
+            self._tasks_svc = build("tasks", "v1", credentials=self._creds, cache_discovery=False)
+        return self._tasks_svc
+
+    @staticmethod
+    def has_tasks_scope():
+        try:
+            return TASKS_SCOPE in json.loads(TOKEN_PATH.read_text("utf-8")).get("scopes", [])
+        except (OSError, ValueError):
+            return False
+
+    def _translate(self, e):
+        """HttpError/RefreshError → 앱 예외로 바꾼다. 바꿀 게 없으면 None."""
+        if isinstance(e, RefreshError):
+            self._creds = self._svc = None
+            return AuthError("로그인이 만료되었습니다. 다시 로그인해 주세요.")
+        if isinstance(e, HttpError):
+            if e.resp.status == 401:
+                self._creds = self._svc = None
+                return AuthError("로그인이 만료되었습니다. 다시 로그인해 주세요.")
+            if e.resp.status == 403 and b"accessNotConfigured" in (e.content or b""):
+                m = re.search(rb"apis/api/([a-z0-9.\-]+)/overview\?project=(\d+)", e.content)
+                api, project = (m.group(1).decode(), m.group(2).decode()) if m else ("calendar-json.googleapis.com", "")
+                return ApiDisabledError(f"https://console.cloud.google.com/apis/library/{api}"
+                                        + (f"?project={project}" if project else ""))
+        return None
+
+    def _call(self, request):
+        try:
+            return request.execute(num_retries=2)
+        except (RefreshError, HttpError) as e:
+            mapped = self._translate(e)
+            if mapped:
+                raise mapped from e
+            raise
+
+    def _batch(self, requests):
+        """여러 요청을 50개씩 묶어 보낸다. 응답을 요청 순서대로 돌려주고, 실패가 있으면 첫 오류를 올린다.
+        이미 지워진 일정(404/410)을 고치거나 지우는 것은 성공으로 친다."""
+        errors, responses = [], {}
+
+        def cb(req_id, resp, exc):
+            if exc is not None and not (isinstance(exc, HttpError) and exc.resp.status in (404, 410)):
+                errors.append(exc)
+            responses[int(req_id)] = resp
+        svc = self._service()
+        for i in range(0, len(requests), 50):
+            batch = svc.new_batch_http_request(callback=cb)
+            for j, r in enumerate(requests[i:i + 50]):
+                batch.add(r, request_id=str(i + j))
+            try:
+                batch.execute()
+            except (RefreshError, HttpError) as e:
+                mapped = self._translate(e)
+                raise (mapped or e) from e
+        if errors:
+            mapped = self._translate(errors[0])
+            raise (mapped or errors[0])
+        return [responses.get(i) for i in range(len(requests))]
+
+    # ---------- 읽기 ----------
+    def fetch_all(self, start, end, want_holidays=True, region="south_korea"):
+        """start~end(date) 범위의 캘린더 목록, 일정, 공휴일을 한 번에 가져온다."""
+        svc = self._service()
+        if self._event_colors is None:
+            colors = self._call(svc.colors().get())
+            self._event_colors = {k: v["background"] for k, v in colors.get("event", {}).items()}
+
+        calendars, page = [], None
+        while True:
+            r = self._call(svc.calendarList().list(pageToken=page, maxResults=250))
+            for c in r.get("items", []):
+                calendars.append({
+                    "id": c["id"],
+                    "summary": c.get("summaryOverride") or c.get("summary", c["id"]),
+                    "color": c.get("backgroundColor", "#4a90d9"),
+                    "primary": bool(c.get("primary")),
+                    "writable": c.get("accessRole") in ("owner", "writer"),
+                    "selected": bool(c.get("selected", False)),
+                })
+            page = r.get("nextPageToken")
+            if not page:
+                break
+
+        events = []
+        for cal in calendars:
+            if is_holiday_calendar(cal["id"]):
+                continue
+            for item in self._list_events(cal["id"], start, end):
+                ev = self._parse(item, cal)
+                if ev:
+                    events.append(ev)
+        holidays = self.fetch_holidays(start, end, region) if want_holidays else {}
+        # 카운트다운은 먼 미래일 수 있어서 따로 넓게 받는다
+        today = date.today()
+        countdowns = []
+        for cal in calendars:
+            if is_holiday_calendar(cal["id"]):
+                continue
+            for item in self._list_events(cal["id"], today - timedelta(days=400), today + timedelta(days=800),
+                                          private=f"{P_CD}=1"):
+                ev = self._parse(item, cal)
+                if ev:
+                    countdowns.append(ev)
+        task_lists, tasks, tasks_status = self.fetch_tasks(start, end)
+        return calendars + task_lists, events + tasks, holidays, (start, end), countdowns, tasks_status
+
+    def fetch_holidays(self, start, end, region):
+        holidays = {}
+        try:
+            items = list(self._list_events(holiday_calendar_id(region), start, end))
+        except HttpError:
+            return holidays  # 공휴일 캘린더를 못 읽어도 나머지는 표시
+        for item in items:
+            if "date" not in item.get("start", {}):
+                continue
+            d0 = date.fromisoformat(item["start"]["date"])
+            d1 = date.fromisoformat(item["end"]["date"])
+            name = item.get("summary", "")
+            desc = (item.get("description") or "").strip().lower()
+            public = not desc or desc.startswith(("공휴일", "public holiday"))
+            for i in range(max(1, (d1 - d0).days)):
+                d = d0 + timedelta(days=i)
+                lst = holidays.setdefault(d, [])
+                if all(n != name for n, _ in lst):
+                    lst.append((name, public))
+        return holidays
+
+    def _list_events(self, cal_id, start, end, q=None, private=None):
+        svc, page = self._service(), None
+        while True:
+            kw = dict(calendarId=cal_id, singleEvents=True, orderBy="startTime", maxResults=2500, pageToken=page)
+            if start:
+                kw["timeMin"] = _rfc3339(start)
+            if end:
+                kw["timeMax"] = _rfc3339(end)
+            if q:
+                kw["q"] = q
+            if private:
+                kw["privateExtendedProperty"] = private
+            r = self._call(svc.events().list(**kw))
+            yield from r.get("items", [])
+            page = r.get("nextPageToken")
+            if not page:
+                return
+
+    def _parse(self, item, cal):
+        if item.get("status") == "cancelled":
+            return None
+        s, e = item.get("start", {}), item.get("end", {})
+        if "date" in s:
+            all_day, start, end = True, date.fromisoformat(s["date"]), date.fromisoformat(e["date"])
+        elif "dateTime" in s:
+            all_day, start, end = False, _local(s["dateTime"]), _local(e["dateTime"])
+        else:
+            return None
+        color = self._event_colors.get(item.get("colorId"), cal["color"]) if self._event_colors else cal["color"]
+        p = item.get("extendedProperties", {}).get("private", {})
+        try:
+            order = int(p.get(P_ORDER) or 0)
+        except ValueError:
+            order = 0
+        rem = item.get("reminders", {})
+        popups = [o["minutes"] for o in rem.get("overrides", []) if o.get("method") == "popup"] \
+            if not rem.get("useDefault", True) else []
+        me = next((a for a in item.get("attendees", []) if a.get("self")), None)
+        organizer = item.get("organizer", {})
+        response = me.get("responseStatus", "needsAction") if me and not organizer.get("self") else ""
+        return Event(
+            id=item["id"], calendar_id=cal["id"], title=item.get("summary", "(제목 없음)"),
+            start=start, end=end, all_day=all_day, color=color,
+            description=item.get("description", ""), location=item.get("location", ""),
+            recurring="recurringEventId" in item, html_link=item.get("htmlLink", ""),
+            recurring_event_id=item.get("recurringEventId", ""),
+            done=p.get(P_DONE) == "1", text_color=p.get(P_COLOR, ""), order=order,
+            line=p.get(P_LINE) == "1", alarm=p.get(P_ALARM, ""), countdown=p.get(P_COUNTDOWN, ""),
+            popup_minutes=popups, writable=cal["writable"],
+            response=response, organizer=(organizer.get("displayName") or organizer.get("email", "")) if response else "",
+        )
+
+    def search(self, calendars, keyword, start, end):
+        """키워드로 일정 검색(구글 서버 검색)."""
+        found = []
+        for cal in calendars:
+            if is_holiday_calendar(cal["id"]) or cal.get("tasks"):
+                continue
+            for item in self._list_events(cal["id"], start, end, q=keyword or None):
+                ev = self._parse(item, cal)
+                if ev:
+                    found.append(ev)
+        found.sort(key=lambda e: (e.first_day, e.sort_key()))
+        return found
+
+    def get_rrule(self, ev):
+        """반복 일정 인스턴스의 원본 RRULE과 원본 시작을 가져온다."""
+        if not ev.recurring_event_id:
+            return "", None
+        master = self._call(self._service().events().get(calendarId=ev.calendar_id, eventId=ev.recurring_event_id))
+        return _rrule_line(master.get("recurrence")), master.get("start", {})
+
+    # ---------- 쓰기 ----------
+    @staticmethod
+    def _times(v):
+        if v["all_day"]:
+            start = {"date": v["start"].isoformat(), "dateTime": None, "timeZone": None}
+            end = {"date": (v["end"] + timedelta(days=1)).isoformat(), "dateTime": None, "timeZone": None}
+        else:
+            start = {"dateTime": v["start"].astimezone().isoformat(), "date": None}
+            end = {"dateTime": v["end"].astimezone().isoformat(), "date": None}
+        return start, end
+
+    def _body(self, v, for_insert=False):
+        start, end = self._times(v)
+        body = {
+            "summary": v["title"], "description": v.get("description", ""), "location": v.get("location", ""),
+            "start": start, "end": end, "extendedProperties": {"private": event_props(v)},
+        }
+        rem = google_reminders(v)
+        if rem:
+            body["reminders"] = rem
+        elif not for_insert:
+            body["reminders"] = {"useDefault": True, "overrides": None}
+        if for_insert:
+            for k in ("start", "end"):
+                body[k] = {kk: vv for kk, vv in body[k].items() if vv is not None}
+            if v.get("recurrence"):
+                body["recurrence"] = [v["recurrence"]]
+        return body
+
+    def create_event(self, v):
+        """만든 일정의 id를 돌려준다(되돌리기·오프라인 대기에서 임시 id를 바꿔 끼우는 데 쓴다)."""
+        return self._call(self._service().events().insert(calendarId=v["calendar_id"], body=self._body(v, True)))["id"]
+
+    def update_event(self, ev, v, scope="one"):
+        """scope: one=이번만, following=이번과 이후, all=전체(반복 일정일 때만 의미가 있다)."""
+        svc = self._service()
+        if ev.recurring and scope == "all":
+            return self._update_series(ev, v)
+        if ev.recurring and scope == "following":
+            self._end_series_before(ev)
+            rule = v.get("recurrence") or self.get_rrule(ev)[0]
+            self.create_event(dict(v, recurrence=rrule_with_until(rule, None) if rule else ""))
+            return
+        cal_id, ev_id = ev.calendar_id, ev.id
+        if v["calendar_id"] != cal_id and not ev.recurring:
+            moved = self._call(svc.events().move(calendarId=cal_id, eventId=ev_id, destination=v["calendar_id"]))
+            cal_id, ev_id = v["calendar_id"], moved["id"]
+        body = self._body(v)
+        if v.get("recurrence") and not ev.recurring:  # 단일 일정을 반복 일정으로
+            body["recurrence"] = [v["recurrence"]]
+        self._call(svc.events().patch(calendarId=cal_id, eventId=ev_id, body=body))
+
+    def _update_series(self, ev, v):
+        svc = self._service()
+        master = self._call(svc.events().get(calendarId=ev.calendar_id, eventId=ev.recurring_event_id))
+        body = self._body(v)
+        # 시작·끝은 원본 날짜를 기준으로, 인스턴스에서 바뀐 만큼만 옮긴다
+        if v["all_day"] and "date" in master["start"]:
+            ds = v["start"] - ev.start
+            de = (v["end"] + timedelta(days=1)) - ev.end
+            body["start"]["date"] = (date.fromisoformat(master["start"]["date"]) + ds).isoformat()
+            body["end"]["date"] = (date.fromisoformat(master["end"]["date"]) + de).isoformat()
+        elif not v["all_day"] and "dateTime" in master["start"]:
+            ds, de = v["start"] - ev.start, v["end"] - ev.end
+            ms = datetime.fromisoformat(master["start"]["dateTime"]) + ds
+            me = datetime.fromisoformat(master["end"]["dateTime"]) + de
+            body["start"]["dateTime"], body["end"]["dateTime"] = ms.isoformat(), me.isoformat()
+        if v.get("recurrence"):
+            body["recurrence"] = [v["recurrence"]]
+        self._call(svc.events().patch(calendarId=ev.calendar_id, eventId=ev.recurring_event_id, body=body))
+
+    def _end_series_before(self, ev):
+        svc = self._service()
+        master = self._call(svc.events().get(calendarId=ev.calendar_id, eventId=ev.recurring_event_id))
+        rule = _rrule_line(master.get("recurrence"))
+        if ev.all_day:
+            until = (ev.start - timedelta(days=1)).strftime("%Y%m%d")
+        else:
+            until = (ev.start.astimezone(timezone.utc) - timedelta(seconds=1)).strftime("%Y%m%dT%H%M%SZ")
+        rec = [r for r in master.get("recurrence", []) if not r.upper().startswith("RRULE:")]
+        rec.append(rrule_with_until(rule, until))
+        self._call(svc.events().patch(calendarId=ev.calendar_id, eventId=ev.recurring_event_id,
+                                      body={"recurrence": rec}))
+
+    def delete_event(self, ev, scope="one"):
+        svc = self._service()
+        if ev.recurring and scope == "all":
+            self._call(svc.events().delete(calendarId=ev.calendar_id, eventId=ev.recurring_event_id))
+        elif ev.recurring and scope == "following":
+            self._end_series_before(ev)
+        else:
+            self._call(svc.events().delete(calendarId=ev.calendar_id, eventId=ev.id))
+
+    def set_props(self, ev, **props):
+        """완료·글자색 같은 DesktopCal식 속성만 바꾼다."""
+        cur = {"done": ev.done, "text_color": ev.text_color, "order": ev.order, "line": ev.line,
+               "alarm": ev.alarm, "countdown": ev.countdown}
+        cur.update(props)
+        self._call(self._service().events().patch(
+            calendarId=ev.calendar_id, eventId=ev.id, body={"extendedProperties": {"private": event_props(cur)}}))
+
+    def apply_ops(self, ops):
+        """셀 편집기 저장 결과를 한 번에 반영. ops = [(kind, ...)]"""
+        svc, reqs = self._service(), []
+        for op in ops:
+            if op[0] == "create":
+                reqs.append(svc.events().insert(calendarId=op[1], body=self._body(op[2], True)))
+            elif op[0] == "patch":
+                reqs.append(svc.events().patch(calendarId=op[1], eventId=op[2], body=op[3]))
+            elif op[0] == "delete":
+                reqs.append(svc.events().delete(calendarId=op[1], eventId=op[2]))
+        if not reqs:
+            return []
+        responses = self._batch(reqs)
+        return [(r or {}).get("id", "") for op, r in zip(ops, responses) if op[0] == "create"]
+
+    def move_event(self, ev, delta_days):
+        """일정(또는 할 일)을 delta_days만큼 옮긴다. 반복 일정은 이 회차만 옮긴다."""
+        if ev.task_list:
+            list_id, task_id = self._task_ids(ev)
+            due = ev.start + timedelta(days=delta_days)
+            self._call(self._tasks().tasks().patch(tasklist=list_id, task=task_id,
+                                                   body={"due": f"{due.isoformat()}T00:00:00.000Z"}))
+            return
+        d = timedelta(days=delta_days)
+        if ev.all_day:
+            body = {"start": {"date": (ev.start + d).isoformat()}, "end": {"date": (ev.end + d).isoformat()}}
+        else:
+            body = {"start": {"dateTime": (ev.start + d).astimezone().isoformat()},
+                    "end": {"dateTime": (ev.end + d).astimezone().isoformat()}}
+        self._call(self._service().events().patch(calendarId=ev.calendar_id, eventId=ev.id, body=body))
+
+    def respond_event(self, ev, status):
+        """초대받은 일정에 참석(accepted) / 미정(tentative) / 거절(declined)로 응답한다. 주최자에게 알림이 간다."""
+        svc = self._service()
+        item = self._call(svc.events().get(calendarId=ev.calendar_id, eventId=ev.id))
+        attendees = item.get("attendees", [])
+        for a in attendees:
+            if a.get("self"):
+                a["responseStatus"] = status
+        self._call(svc.events().patch(calendarId=ev.calendar_id, eventId=ev.id, body={"attendees": attendees},
+                                      sendUpdates="all"))
+
+    def insert_many(self, cal_id, values):
+        svc = self._service()
+        self._batch([svc.events().insert(calendarId=cal_id, body=self._body(v, True)) for v in values])
+
+
+    # ---------- 할 일(Google Tasks) ----------
+    def fetch_tasks(self, start, end):
+        """마감일이 start~end 안에 있는 할 일. (목록들, 할 일 Event들, 상태) 상태: ok | scope | ('disabled', url) | error"""
+        if not self.has_tasks_scope():
+            return [], [], "scope"
+        try:
+            svc = self._tasks()
+            lists, page = [], None
+            while True:
+                r = self._call(svc.tasklists().list(maxResults=100, pageToken=page))
+                lists += r.get("items", [])
+                page = r.get("nextPageToken")
+                if not page:
+                    break
+            cals, events = [], []
+            for tl in lists:
+                cid = f"tasks:{tl['id']}"
+                cals.append({"id": cid, "summary": f"할 일: {tl.get('title', '')}", "color": TASK_COLOR,
+                             "primary": False, "writable": False, "selected": True, "tasks": True})
+                page = None
+                while True:
+                    r = self._call(svc.tasks().list(
+                        tasklist=tl["id"], showCompleted=True, showHidden=False, maxResults=100, pageToken=page,
+                        dueMin=f"{start.isoformat()}T00:00:00.000Z", dueMax=f"{end.isoformat()}T00:00:00.000Z"))
+                    for item in r.get("items", []):
+                        if item.get("due") and not item.get("deleted"):
+                            events.append(self._parse_task(item, tl["id"], cid))
+                    page = r.get("nextPageToken")
+                    if not page:
+                        break
+            return cals, events, "ok"
+        except ApiDisabledError as e:
+            return [], [], ("disabled", e.url)
+        except HttpError as e:
+            if e.resp.status == 403:
+                return [], [], "scope"
+            return [], [], "error"
+
+    @staticmethod
+    def _parse_task(item, list_id, cal_id):
+        d = date.fromisoformat(item["due"][:10])  # 할 일 마감일은 날짜만 의미가 있다(시각은 항상 00:00)
+        return Event(
+            id=f"task:{list_id}:{item['id']}", calendar_id=cal_id, title=item.get("title") or "(제목 없음)",
+            start=d, end=d + timedelta(days=1), all_day=True, color=TASK_COLOR,
+            description=item.get("notes", ""), html_link=item.get("webViewLink", ""),
+            done=item.get("status") == "completed", task_list=list_id, writable=True)
+
+    @staticmethod
+    def _task_ids(ev):
+        _, list_id, task_id = ev.id.split(":", 2)
+        return list_id, task_id
+
+    @staticmethod
+    def _task_body(title, notes, due, done):
+        body = {"title": title, "notes": notes, "due": f"{due.isoformat()}T00:00:00.000Z",
+                "status": "completed" if done else "needsAction"}
+        if not done:
+            body["completed"] = None
+        return body
+
+    def update_task(self, ev, title, notes, due, done):
+        list_id, task_id = self._task_ids(ev)
+        self._call(self._tasks().tasks().patch(tasklist=list_id, task=task_id,
+                                               body=self._task_body(title, notes, due, done)))
+
+    def set_task_done(self, ev, done):
+        list_id, task_id = self._task_ids(ev)
+        body = {"status": "completed" if done else "needsAction"}
+        if not done:
+            body["completed"] = None
+        self._call(self._tasks().tasks().patch(tasklist=list_id, task=task_id, body=body))
+
+    def delete_task(self, ev):
+        list_id, task_id = self._task_ids(ev)
+        self._call(self._tasks().tasks().delete(tasklist=list_id, task=task_id))
+
+    def create_task(self, list_id, title, notes, due, done=False):
+        item = self._call(self._tasks().tasks().insert(tasklist=list_id, body=self._task_body(title, notes, due, done)))
+        return f"task:{list_id}:{item['id']}"
