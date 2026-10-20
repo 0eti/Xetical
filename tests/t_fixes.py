@@ -160,7 +160,8 @@ g.update_event(inst, vals(), "following")
 new = svc.bodies("events.insert")[0]
 check("A2 이후: 규칙 그대로면 COUNT를 남은 횟수로(10-3=7)", new.get("recurrence") == ["RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=7"], new)
 cut = [b_ for b_ in svc.bodies("events.patch") if "recurrence" in (b_ or {})][0]["recurrence"][-1]
-check("A2 이후: 앞쪽 규칙은 이 회차 전에서 끝남", "UNTIL=20261116T005959Z" in cut and "COUNT" not in cut, cut)
+until = (S0.astimezone(timezone.utc) - timedelta(seconds=1)).strftime("%Y%m%dT%H%M%SZ")  # 이 PC 시간대 기준
+check("A2 이후: 앞쪽 규칙은 이 회차 전에서 끝남", f"UNTIL={until}" in cut and "COUNT" not in cut, cut)
 
 g, svc = fresh()
 svc.master["recurrence"] = ["RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=20261231T145959Z"]

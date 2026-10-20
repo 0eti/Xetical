@@ -27,7 +27,10 @@
 
 | 파일 | 역할 |
 |---|---|
-| `app.py` | 본체. 창·트레이·메뉴(우클릭·☰, 2026-10-20 정리), 동기화, 보낼 편지함, 되돌리기, 할 일·반복 할 일, 복사·붙여넣기, 테마, 설정 백업, 화면 변경 대응, `main()` |
+| `app.py` | 본체. 창·트레이·메뉴(우클릭·☰), 설정 반영, 테마, 설정 백업, 로그인, 카운트다운 카드, 화면 변경 대응, `main()`. `App(SyncMixin, EditMixin, TaskMixin, QObject)` |
+| `sync.py` | `SyncMixin`: 동기화, 보낼 편지함 결과 처리(다 보냄·막힘·실패), 미완료 자동 연기 |
+| `editing.py` | `EditMixin`: 칸 편집기·일정 창 연결, 끌어서 옮기기, 초대 응답, 복사·붙여넣기, 되돌리기 |
+| `tasks.py` | `TaskMixin`: 할 일, 반복 할 일(다음 회차 만들기, 예정 표시) |
 | `view.py` | 바탕화면 달력 창 그리기와 마우스 처리. 4가지 표시 방식, 여러 날 막대, 끌어서 옮기기, ☐ 체크, 선택, 직접 판정하는 더블클릭(`_is_second_click`), 단축키(QShortcut) |
 | `desktop.py` | Win32: 창의 owner를 바탕화면 FolderView로 지정, NOACTIVATE, Z순서 잠금(WM_WINDOWPOSCHANGING), 유리 효과, 클릭 통과(WS_EX_TRANSPARENT), `force_foreground` |
 | `mousehook.py` | 아이콘 클릭 통과: WH_MOUSE_LL 훅 + 탐색기 리스트뷰에 LVM_HITTEST(VirtualAllocEx로 잡은 메모리)로 아이콘 유무를 묻는다. 빈 곳 클릭은 삼켜서 달력에 넘긴다. |
@@ -85,21 +88,18 @@
 
 ## 5. 시험
 
-`tests/`에 있는 스크립트들(scratch에서 옮겨 옴). 모두 `python tests/X.py <임시폴더>`로 실행한다. 데이터 파일 경로는 임시 폴더로 바꿔 쓴다.
+**한 번에:** `.venv\Scripts\python.exe tests\run_all.py` (가짜 구글 시험 4개, 실패하면 종료 코드 1).
+실제 구글 시험까지는 `--google`(사용자 허락을 받고). GitHub에 push하면 Actions(windows-latest)가 같은 명령을 돌린다.
 
-```
-set PYTHONIOENCODING=utf-8
-set QT_QPA_PLATFORM=offscreen
-set QT_QPA_FONTDIR=C:/Windows/Fonts
-.venv\Scripts\python.exe -u tests\t_all.py %TEMP%\xt
-```
+스크립트 하나만: 환경 변수 `PYTHONIOENCODING=utf-8`, `QT_QPA_PLATFORM=offscreen`, `QT_QPA_FONTDIR=C:/Windows/Fonts`를 두고
+`.venv\Scripts\python.exe -u tests\t_all.py <임시폴더>`. 데이터 파일 경로는 임시 폴더로 바꿔 쓴다.
 
 | 스크립트 | 내용 |
 |---|---|
 | `t_all.py` (32) | 가짜 구글로 핵심 흐름 |
 | `t_more.py` (80) | 나머지 기능 전부 |
 | `t_repeat.py` (11) | 반복 할 일 |
-| `t_fixes.py` (47) | 2026-10-21 리뷰에서 고친 A1~A6·B7~B12 (가짜 구글 API로 `gcal.py` 안쪽까지) |
+| `t_fixes.py` (55) | 2026-10-21 리뷰·재리뷰·최종 리뷰에서 고친 것 (가짜 구글 API로 `gcal.py` 안쪽까지) |
 | `t_google.py` (30) | **실제 구글**: 2027년 1월에 "[Xetical 테스트]" 항목을 만들었다 지운다. 사용자 허락을 받고 돌릴 것 |
 
 **마지막 결과:** 전부 통과(2026-10-21, `t_google` 30/30 포함). 실제 화면 시험도 대부분 통과(아래 6 참고).
@@ -125,9 +125,10 @@ set QT_QPA_FONTDIR=C:/Windows/Fonts
   - Claude 창이 바탕화면을 덮고 있어서 두 번째 클릭이 그쪽으로 갔다. 시험 전에 Xetical을 활성화하고 **Win+D**를 누르면 해결된다.
   - 클릭 통과 모드에서는 도구 규칙상 탐색기 위 우클릭과 드래그를 할 수 없다. 우회하지 말 것.
 - 실제 구글 시험은 정리를 반드시 `finally`에서 한다. 404/410은 무시한다.
-- `tests/t_task.py`, `t_virtual.py`는 예전 임시 스크립트라 지금 코드와 맞지 않는다(`t_repeat`이 대신함).
 
-**반복 규칙 값 약속(2026-10-21):** 편집 값 `v["recurrence"]`는 `None`=규칙 그대로, `""`=반복 안 함, `"RRULE:…"`=새 규칙.
+**반복 규칙 값 약속(2026-10-21):** 편집 값 `v["recurrence"]`는 `model.KEEP`(None)=규칙 그대로, `model.NO_REPEAT`("")=반복 안 함,
+`"RRULE:…"`=새 규칙. 새 코드에서는 None·"" 대신 이 이름을 쓴다.
+'이번과 이후': 첫 회차면 전체로 처리한다. 앞쪽 자르기가 거절(4xx)되면 만든 뒤쪽을 지운다.
 `Event.values()`는 `None`을 준다. 일정 창도 반복 칸을 손대지 않으면 `None`이고, 직접 고쳤을 때만 `""`나 규칙을 넣는다.
 반복 규칙을 못 불러오면 일정 창을 열지 않는다(모르는 규칙을 '반복 안 함'으로 저장하지 않게).
 '이번과 이후'는 뒤쪽 반복을 먼저 만들고(미리 정한 id) 앞쪽을 나중에 자른다. 그래야 다시 보내도 안전하다.
