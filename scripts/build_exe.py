@@ -4,6 +4,7 @@
 2. PyInstaller로 한 폴더(onedir) 묶음을 dist/Xetical/에 만든다. 한 파일(onefile)은 실행할 때마다
    임시 폴더에 풀어서 느리고 백신이 의심하는 경우가 많아서 쓰지 않는다.
 3. portable.txt를 넣어 데이터가 exe 옆 data/에 저장되게 하고, dist/Xetical-<버전>-portable.zip으로 묶는다.
+4. Inno Setup 6이 있으면 installer/xetical.iss로 dist/Xetical-<버전>-setup.exe도 만든다.
 
 준비: .venv\\Scripts\\python.exe -m pip install -r requirements-build.txt
 """
@@ -112,6 +113,24 @@ def main():
                 z.write(f, Path("Xetical") / f.relative_to(app_dir))
     size = sum(f.stat().st_size for f in app_dir.rglob("*") if f.is_file())
     print(f"\n완료: {zip_path}  (zip {zip_path.stat().st_size / 1e6:.1f}MB, 풀면 {size / 1e6:.1f}MB)")
+
+    iscc = find_iscc()
+    if iscc is None:
+        print("설치 프로그램: Inno Setup 6(ISCC.exe)이 없어 건너뜀 (winget install JRSoftware.InnoSetup)")
+        return
+    subprocess.run([str(iscc), "/Q", f"/DMyAppVersion={APP_VERSION}", str(ROOT / "installer" / "xetical.iss")],
+                   cwd=ROOT, check=True)
+    setup = ROOT / "dist" / f"Xetical-{APP_VERSION}-setup.exe"
+    print(f"완료: {setup}  ({setup.stat().st_size / 1e6:.1f}MB)")
+
+
+def find_iscc():
+    for base in (os.environ.get("LOCALAPPDATA", ""), os.environ.get("ProgramFiles(x86)", ""),
+                 os.environ.get("ProgramFiles", "")):
+        p = Path(base) / ("Programs" if base == os.environ.get("LOCALAPPDATA") else "") / "Inno Setup 6" / "ISCC.exe"
+        if base and p.exists():
+            return p
+    return shutil.which("ISCC")
 
 
 if __name__ == "__main__":
