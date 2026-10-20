@@ -1,6 +1,10 @@
 # Xetical 구현 계획 (아직 만들지 않은 것)
 
-## 1-4. 실행 파일(.exe) 만들기 — 마지막에 진행
+## 1-4. 실행 파일(.exe) 만들기 — 완료(v1.2.0, 포터블 zip)
+
+> 2026-10-21에 만들었다. `scripts/build_exe.py`가 아이콘·PyInstaller(onedir)·쓰지 않는 Qt/구글 API 파일 정리·zip까지 한다.
+> 데이터 위치: exe 옆 `portable.txt`가 있으면 `data\`, 없으면 `%APPDATA%\Xetical`(`config.py`). 자동 실행은 exe 경로를 등록한다.
+> **남은 것:** Inno Setup 설치 프로그램(이 PC에 Inno Setup이 없어 보류, 설치는 사용자 허락 필요), exe 파일 속성의 버전 정보.
 
 **목표:** Python이 없는 PC에서도 `Xetical.exe` 하나로 실행되고, 작업 관리자에도 "Xetical"로 보이게 한다.
 

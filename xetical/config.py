@@ -1,15 +1,27 @@
-"""설정 파일과 데이터 경로. 모든 데이터는 프로그램 폴더의 data/ 안에 저장된다(포터블).
+"""설정 파일과 데이터 경로.
+
+데이터 폴더(data):
+- 소스로 실행(Xetical.bat): 프로그램 폴더의 data/
+- exe: exe 옆에 portable.txt가 있으면 exe 폴더의 data/(포터블), 없으면 %APPDATA%\\Xetical
+  (설치 프로그램으로 Program Files에 두면 그 폴더에는 쓸 수 없기 때문)
 
 설정 항목은 DesktopCal 설정 창(캘린더 / 셀 / 글꼴 및 색상 / 고급)의 구성을 그대로 따른다.
 기본값은 사용자가 쓰던 DesktopCal 설정값이다.
 """
 import copy
 import json
+import os
+import sys
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = BASE_DIR / "data"
-DATA_DIR.mkdir(exist_ok=True)
+FROZEN = getattr(sys, "frozen", False)  # PyInstaller로 묶은 exe로 실행 중
+APP_DIR = Path(sys.executable).parent if FROZEN else Path(__file__).resolve().parent.parent  # exe·main.pyw 폴더
+BASE_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR))  # 함께 묶은 파일(README.md 등)이 있는 곳
+if FROZEN and not (APP_DIR / "portable.txt").exists():
+    DATA_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / "Xetical"
+else:
+    DATA_DIR = APP_DIR / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 CONFIG_PATH = DATA_DIR / "config.json"
 CLIENT_SECRET_PATH = DATA_DIR / "client_secret.json"
@@ -22,7 +34,7 @@ LOCK_PATH = DATA_DIR / "xetical.lock"
 LOG_PATH = DATA_DIR / "xetical.log"
 README_PATH = BASE_DIR / "README.md"
 
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 
 # 설정 백업에서 빼는 항목(이 PC에만 의미가 있는 값)
 LOCAL_ONLY_KEYS = {"geometry", "card_positions", "summary_last", "editor_size"}

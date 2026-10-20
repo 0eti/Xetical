@@ -1,0 +1,3 @@
+# exe 묶기에만 필요(scripts/build_exe.py)
+-r requirements.txt
+pyinstaller==6.22.3

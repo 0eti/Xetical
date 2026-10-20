@@ -4,8 +4,22 @@ DesktopCal처럼 바탕화면에 박혀 있는 달력인데, 일정은 **구글 
 
 ## 실행
 
-`Xetical.bat`을 더블클릭하세요. (처음 한 번은 구성요소 설치로 1~2분 걸립니다)
+### 실행 파일(권장, Python 필요 없음)
+1. [Releases](https://github.com/0eti/Xetical/releases)에서 `Xetical-<버전>-portable.zip`을 받습니다.
+2. 원하는 곳에 압축을 풀고 `Xetical\Xetical.exe`를 실행합니다.
+   - 서명하지 않은 개인 프로그램이라 처음에 Windows SmartScreen 경고가 뜰 수 있습니다. **추가 정보 → 실행**을 누르세요.
+3. 설정·로그인 정보는 같은 폴더의 `data\`에 저장됩니다(포터블). 폴더째 옮겨도 그대로 씁니다.
+   - `portable.txt`를 지우면 `%APPDATA%\Xetical`에 저장합니다.
+4. 업데이트: 새 zip을 풀고 예전 `data\` 폴더를 새 `Xetical\` 폴더로 옮기면 됩니다.
+
+### 소스로 실행
+`Xetical.bat`을 더블클릭하세요(Python 3.10 이상 필요, 처음 한 번은 구성요소 설치로 1~2분 걸립니다).
+
 작업 표시줄 트레이에 달력 아이콘이 생기고, 바탕화면 오른쪽 위에 달력이 나타납니다.
+처음에는 아래 **구글 연동 준비**가 필요합니다.
+
+실행 파일 직접 만들기: `.venv\Scripts\python.exe -m pip install -r requirements-build.txt` 후
+`.venv\Scripts\python.exe scripts\build_exe.py` → `dist\Xetical-<버전>-portable.zip`
 
 ## 사용법
 

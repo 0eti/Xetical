@@ -71,9 +71,11 @@ class Worker(QObject):
 
 
 def autostart_command():
+    if config.FROZEN:  # exe로 실행 중이면 exe를 그대로 등록한다
+        return f'"{sys.executable}"'
     pyw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
     exe = pyw if os.path.exists(pyw) else sys.executable
-    return f'"{exe}" "{config.BASE_DIR / "main.pyw"}"'
+    return f'"{exe}" "{config.APP_DIR / "main.pyw"}"'
 
 
 class App(SyncMixin, EditMixin, TaskMixin, QObject):
