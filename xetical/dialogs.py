@@ -217,8 +217,9 @@ class RepeatEditor(QGroupBox):
                 self.until.setDate(QDate(int(u[:4]), int(u[4:6]), int(u[6:8])))
 
     def rrule(self, start, all_day):
-        if not self.dirty and self.loaded:  # 손대지 않았으면 원래 규칙 그대로
-            return self.loaded
+        """None = 손대지 않았으니 규칙 그대로, "" = 반복 안 함, "RRULE:…" = 새 규칙."""
+        if not self.dirty:
+            return None
         k = self.kind.currentData()
         if k == "none":
             return ""
@@ -535,7 +536,8 @@ class EventDialog(QDialog):
         return v
 
     def recurrence_changed(self):
-        return self.values()["recurrence"] != (self.orig_rrule or "")
+        rule = self.values()["recurrence"]
+        return rule is not None and rule != (self.orig_rrule or "")
 
     def _save(self):
         v = self.values()

@@ -904,10 +904,16 @@ class App(QObject):
             self._open_task_dialog(ev)
         elif ev.recurring:  # 반복 규칙은 원본에서 읽어 와야 한다
             self.set_status("반복 일정 불러오는 중…")
-            self.worker.submit(self.gcal.get_rrule, ev,
-                               callback=lambda r, e: (self.set_status(""), self._open_event_dialog(ev, r[0] if r else "")))
+            self.worker.submit(self.gcal.get_rrule, ev, callback=lambda r, e: self._rrule_loaded(ev, r, e))
         else:
             self._open_event_dialog(ev, "")
+
+    def _rrule_loaded(self, ev, res, err):
+        if err is not None:  # 규칙을 모르는 채로 열면 '반복 안 함'으로 보여 저장할 때 반복이 지워질 수 있다
+            self.set_status("반복 일정을 불러오지 못했습니다 (인터넷 연결 확인)")
+            return
+        self.set_status("")
+        self._open_event_dialog(ev, res[0])
 
     def _open_event_dialog(self, ev, rrule):
         dlg = EventDialog(self.store.calendars, event=ev, rrule=rrule, cfg=self.cfg)

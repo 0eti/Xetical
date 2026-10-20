@@ -302,11 +302,14 @@ class CellEditor(QWidget):
         alarm = ""
         if self.cfg["default_alarm_on"] and self.cfg["default_alarm_lines"]:
             alarm = f"{self.cfg['default_alarm_time']}|{','.join(str(x) for x in self.cfg['default_alarm_days'])}"
-        # 줄을 넣거나 빼거나 옮겼을 때만 순서 번호를 새로 매긴다(열었다 닫기만 하면 구글에 쓰지 않는다)
-        reordered = [ln["ev"].id if ln["ev"] else None for ln in lines] != [e.id for e in self.line_events]
+        # 무엇이든 바뀌었으면 순서 번호를 모두 새로 매긴다(휴대폰에서 만든 일정은 번호가 모두 0이라, 이름만 바꿔도
+        # 제목순으로 다시 섞인다). 열었다 닫기만 했으면 구글에 쓰지 않는다.
+        changed = [ln["ev"].id if ln["ev"] else None for ln in lines] != [e.id for e in self.line_events] or any(
+            (ln["ev"].done, ln["ev"].text_color or "", ln["ev"].title) != (ln["done"], ln["color"], ln["text"])
+            for ln in lines if ln["ev"])
         for i, ln in enumerate(lines):
             ev = ln["ev"]
-            props = {"done": ln["done"], "text_color": ln["color"], "order": i if reordered else ev.order if ev else i,
+            props = {"done": ln["done"], "text_color": ln["color"], "order": i if changed or not ev else ev.order,
                      "line": True}
             if ev:
                 renamed = ev.title != ln["text"]

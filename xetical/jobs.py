@@ -76,11 +76,23 @@ def assign_event_ids(op, args):
         values = [args[0]]
     elif op == "apply_ops":
         values = [o[2] for o in args[0] if o[0] == "create"]
+    elif op == "update_event" and len(args) > 2 and args[2] == "following":  # '이번과 이후'는 뒤쪽 반복을 새로 만든다
+        values = [args[1]]
     else:
         return []
     for v in values:
         v.setdefault("event_id", uuid.uuid4().hex)  # 구글 일정 id는 0-9a-v 글자만 쓸 수 있다
-    return [v["event_id"] for v in values]
+    return [v["event_id"] for v in values] if op != "update_event" else []
+
+
+def upgrade_job(job):
+    """예전(2026-10-21 전) 작업: 일정 수정 값의 recurrence ""는 '규칙 그대로'였다. 지금 약속(None)으로 바꾼다."""
+    if job.get("v", 1) < 2 and job["op"] == "update_event":
+        v = job["args"][1]
+        if isinstance(v, dict) and v.get("recurrence") == "":
+            v["recurrence"] = None
+    job["v"] = 2
+    return job
 
 
 def run_job(gcal, job, id_map):
@@ -102,7 +114,7 @@ class Outbox(QObject):
         super().__init__()
         self.gcal, self.worker = gcal, worker
         data = load_json(OUTBOX_PATH, {})
-        self.jobs = data.get("jobs", [])
+        self.jobs = [upgrade_job(j) for j in data.get("jobs", [])]
         self.id_map = data.get("ids", {})
         self.busy = False
         self.retry = QTimer(self, singleShot=True, interval=RETRY_MS, timeout=self.process)
@@ -120,7 +132,7 @@ class Outbox(QObject):
         for tmp, real in zip(tmps, assign_event_ids(op, args)):
             if tmp:
                 self.id_map[tmp] = real
-        self.jobs.append({"op": op, "args": args, "tmps": list(tmps), "label": label})
+        self.jobs.append({"op": op, "args": args, "tmps": list(tmps), "label": label, "v": 2})
         self._save()
         self.changed.emit()
         self.process()
@@ -137,9 +149,11 @@ class Outbox(QObject):
 
     def _done(self, job, created, err):
         self.busy = False
-        if isinstance(err, HttpError) and err.resp.status in (404, 410) and not job["op"].startswith("create"):
+        creates = job["op"].startswith("create") or job["op"] == "apply_ops"
+        if isinstance(err, HttpError) and err.resp.status in (404, 410) and not creates:
             err = None  # 이미 지워졌거나 없는 일정을 고치거나 지우려 한 것 → 할 일이 없으니 성공으로 친다
-            # (만들기가 404면 캘린더·목록이 없어진 것이라 실패로 알린다)
+            # (만들기가 404면 캘린더·목록이 없어진 것이라 실패로 알린다. 칸 편집 묶음에서 고치기·지우기의
+            #  404는 _batch가 이미 성공으로 걸러 내므로, 여기까지 온 404는 만들기다)
         if err is not None and (is_offline(err) or isinstance(err, (AuthError, ApiDisabledError))):
             self.retry.start()
             self.blocked.emit(err)

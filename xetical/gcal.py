@@ -446,11 +446,15 @@ class GCal:
         if ev.recurring and scope == "all":
             return self._update_series(ev, v)
         if ev.recurring and scope == "following":
-            old = self._end_series_before(ev)
+            master = self._call(svc.events().get(calendarId=ev.calendar_id, eventId=ev.recurring_event_id))
+            old = _rrule_line(master.get("recurrence"))
             rule = v.get("recurrence")
             if rule is None or rule == old:  # 규칙을 그대로 두면 끝(UNTIL)은 지키고 남은 횟수(COUNT)만 다시 센다
                 rule = self._remaining_rule(ev, old) if old else ""
+            # 뒤쪽 반복을 먼저 만들고(미리 정한 id라 다시 보내도 409로 막힌다) 그다음 앞쪽을 자른다.
+            # 거꾸로 하면 자른 직후 끊겼을 때 다시 보내면서 잘린 규칙을 원래 규칙으로 읽게 된다.
             self.create_event(dict(v, recurrence=rule))
+            self._end_series_before(ev, master)
             return
         cal_id, ev_id = ev.calendar_id, ev.id
         if v["calendar_id"] != cal_id and not ev.recurring:
@@ -498,10 +502,11 @@ class GCal:
                 break
         return rule[:m.start(1)] + str(max(1, int(m.group(1)) - used)) + rule[m.end(1):]
 
-    def _end_series_before(self, ev):
-        """반복 일정을 이 회차 앞에서 끝낸다. 자르기 전의 RRULE을 돌려준다."""
+    def _end_series_before(self, ev, master=None):
+        """반복 일정을 이 회차 앞에서 끝낸다(master: 이미 받아 둔 원본)."""
         svc = self._service()
-        master = self._call(svc.events().get(calendarId=ev.calendar_id, eventId=ev.recurring_event_id))
+        if master is None:
+            master = self._call(svc.events().get(calendarId=ev.calendar_id, eventId=ev.recurring_event_id))
         rule = _rrule_line(master.get("recurrence"))
         if ev.all_day:
             until = (ev.start - timedelta(days=1)).strftime("%Y%m%d")
@@ -511,7 +516,6 @@ class GCal:
         rec.append(rrule_with_until(rule, until))
         self._call(svc.events().patch(calendarId=ev.calendar_id, eventId=ev.recurring_event_id,
                                       body={"recurrence": rec}))
-        return rule
 
     def delete_event(self, ev, scope="one"):
         svc = self._service()

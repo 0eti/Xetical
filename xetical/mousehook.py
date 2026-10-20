@@ -121,6 +121,7 @@ class ClickThrough(QObject):
         super().__init__()
         self.win = win
         self.hook = None
+        self.active = False                     # 켜져 있어야 하는가(훅 걸기에 실패해도 점검 때 다시 시도)
         self.probe = IconProbe()
         self._proc = HOOKPROC(self._callback)  # GC되지 않게 보관
         self._swallowing = set()                # 삼킨 버튼(눌림을 삼켰으면 뗌도 삼킨다)
@@ -129,6 +130,7 @@ class ClickThrough(QObject):
         self._cursor = None                     # 지난 점검 때 커서 위치
 
     def start(self):
+        self.active = True
         if not self.hook:
             self.hook = u.SetWindowsHookExW(WH_MOUSE_LL, self._proc, k.GetModuleHandleW(None), 0)
             if not self.hook:
@@ -139,6 +141,8 @@ class ClickThrough(QObject):
         """Windows는 응답이 늦은 훅을 알리지 않고 떼어 버린다(LowLevelHooksTimeout). 그러면 통과 창인 달력이
         아예 눌리지 않으니, 커서가 움직였는데 훅이 한 번도 불리지 않았으면 다시 건다. 몇 초마다 부른다."""
         if not self.hook:
+            if self.active:  # 앞서 다시 걸기에 실패했다
+                self.start()
             return
         pt = wt.POINT()
         u.GetCursorPos(ctypes.byref(pt))
@@ -151,6 +155,7 @@ class ClickThrough(QObject):
         self._calls, self._cursor = 0, cur
 
     def stop(self):
+        self.active = False
         if self.hook:
             u.UnhookWindowsHookEx(self.hook)
             self.hook = None

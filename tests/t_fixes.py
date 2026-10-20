@@ -376,5 +376,82 @@ bat = Path("Xetical.bat").read_bytes()
 check("B11 bat: CRLF·ASCII 그대로", b"\r\n" in bat and b"\n" not in bat.replace(b"\r\n", b"") and bat.isascii())
 check("B11 bat: 설치가 끝났다는 표시 파일로 다시 설치 여부를 정함", b"requirements.installed" in bat and b"fc /b" in bat)
 
+# ================================================================ 재리뷰(2026-10-21) 1·2·3·4·5·7
+# ---------- R1: 반복 규칙을 모르거나 손대지 않았으면 '그대로' ----------
+from xetical.dialogs import EventDialog
+check("R1 반복 칸을 손대지 않으면 None(규칙 그대로)", RepeatEditor().rrule(start, False) is None)
+rec_ev = Event("i9", "me", "운동", S0, S0 + timedelta(hours=1), False, recurring=True, recurring_event_id="m1")
+dlg = EventDialog(CALS, event=rec_ev, rrule="RRULE:FREQ=WEEKLY;BYDAY=MO", cfg=a.cfg)
+dlg.title.setText("운동 (변경)")
+check("R1 반복 일정 창에서 제목만 고치면 규칙은 그대로, 범위 셋 다 고를 수 있음",
+      dlg.values()["recurrence"] is None and not dlg.recurrence_changed())
+dlg.repeat.kind.setCurrentIndex(dlg.repeat.kind.findData("none"))
+check("R1 '반복 안 함'을 직접 고르면 \"\"", dlg.values()["recurrence"] == "" and dlg.recurrence_changed())
+dlg.close()
+opened = []
+a._open_event_dialog = lambda ev, rule: opened.append(rule)
+a._rrule_loaded(rec_ev, None, httplib2.ServerNotFoundError("offline"))
+check("R1 반복 규칙을 못 불러오면 창을 열지 않음", opened == [] and "불러오지 못했" in a.win.status, a.win.status)
+a._rrule_loaded(rec_ev, ("RRULE:FREQ=DAILY", {}), None)
+check("R1 불러오면 그 규칙으로 창을 엶", opened == ["RRULE:FREQ=DAILY"])
+del a._open_event_dialog
+
+# ---------- R2: '이번과 이후'를 다시 보내도 안전 ----------
+g, svc = fresh()
+svc.fail = {"events.patch": 503}  # 뒤쪽을 만든 뒤 앞쪽을 자르다가 끊김
+v2 = vals(event_id="ccc333")
+try:
+    g.update_event(inst, v2, "following")
+except HttpError:
+    pass
+kinds = [k for k, _ in svc.log if k in ("events.insert", "events.patch")]
+check("R2 뒤쪽 반복을 먼저 만들고 앞쪽은 나중에 자름", kinds[:2] == ["events.insert", "events.patch"], kinds)
+svc.fail = {}
+g.update_event(inst, v2, "following")  # 보낼 편지함이 다시 보냄
+cut = svc.master["recurrence"][-1]
+check("R2 다시 보내면: 중복 없이(409) 앞쪽만 마저 자름", svc.existing == {"ccc333"} and "UNTIL=" in cut and "COUNT" not in cut, cut)
+check("R2 처음 만든 뒤쪽 규칙은 원래 횟수 기준(10-3=7)", svc.bodies("events.insert")[0]["recurrence"] == ["RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=7"])
+jargs = J.encode([inst, vals(), "following"])
+J.assign_event_ids("update_event", jargs)
+check("R2 편지함이 '이후' 수정에도 id를 미리 붙임", len(jargs[1].get("event_id", "")) == 32)
+
+# ---------- R3: 이름만 바꿔도 순서 번호를 모두 새로 ----------
+ed3 = CellEditor(a.cfg, a.store, T + timedelta(days=1), QRect(0, 0, 160, 120), "me", [])
+ed3.edit.setPlainText("하\n나")
+ed3.edit.document().firstBlock().setUserState(0)
+ed3.edit.document().firstBlock().next().setUserState(1)
+ops3, _l, _a = ed3.collect()
+orders = {op[2]: op[3]["extendedProperties"]["private"]["xeticalOrder"] for op in ops3 if op[0] == "patch"}
+check("R3 순서 번호가 같은 두 줄 중 하나 이름을 바꾸면 둘 다 0·1로", orders == {"x1": "0", "x2": "1"}, ops3)
+ed3.close()
+
+# ---------- R4: 칸 편집 묶음의 만들기 404 ----------
+fake.mode = "gone"
+failed.clear()
+a.outbox.add("apply_ops", [("create", "gone-cal", {"title": "줄", "calendar_id": "gone-cal"})], tmps=["tmp-c"], label="칸 편집")
+pump(lambda: len(a.outbox) == 0)
+check("R4 칸 편집 묶음이 404면 실패로 알림", failed == ["칸 편집"], failed)
+fake.mode = None
+
+# ---------- R5: 다시 걸기에 실패해도 계속 시도 ----------
+hook = ClickThrough(a.win)
+hook.start()
+u_ = __import__("xetical.mousehook", fromlist=["u"]).u
+u_.UnhookWindowsHookEx(hook.hook)
+hook.hook = None  # 다시 걸기에 실패한 상태
+hook.check()
+check("R5 켜져 있는데 훅이 없으면 점검 때 다시 검", bool(hook.hook))
+hook.stop()
+hook.check()
+check("R5 끈 뒤에는 다시 걸지 않음", not hook.hook)
+
+# ---------- R7: 예전 보낼 편지함 작업 ----------
+old_job = {"op": "update_event", "args": J.encode([inst, dict(vals(), recurrence=""), "all"]), "tmps": [], "label": "x"}
+J.upgrade_job(old_job)
+check("R7 예전 작업의 recurrence \"\"는 '그대로'(None)로", old_job["args"][1]["recurrence"] is None and old_job["v"] == 2)
+new_job = {"op": "update_event", "args": J.encode([inst, dict(vals(), recurrence=""), "all"]), "tmps": [], "label": "x", "v": 2}
+J.upgrade_job(new_job)
+check("R7 지금 작업의 \"\"(반복 안 함)는 그대로", new_job["args"][1]["recurrence"] == "")
+
 print(f"\n{sum(ok for _, ok in results)}/{len(results)} 통과")
 a.shutdown() if hasattr(a, "shutdown") else None
