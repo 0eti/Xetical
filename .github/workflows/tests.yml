@@ -1,0 +1,23 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  offline:
+    # 가짜 구글로 도는 시험만 돌린다(실제 구글 시험 t_google은 로그인 정보가 필요해서 PC에서만)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      PYTHONIOENCODING: utf-8
+      QT_QPA_PLATFORM: offscreen
+      QT_QPA_FONTDIR: C:/Windows/Fonts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - run: python tests/run_all.py
