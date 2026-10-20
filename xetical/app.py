@@ -1,16 +1,15 @@
-"""Xetical 본체: 창, 트레이, 동기화, 대화상자를 엮는다. 메뉴 구성은 DesktopCal을 따른다."""
-import copy
+"""Xetical 본체: 창, 트레이, 메뉴, 설정, 로그인을 엮는다. 메뉴 구성은 DesktopCal을 따른다.
+동기화는 sync.py, 일정 편집·되돌리기·복사는 editing.py, 할 일은 tasks.py에 나눠 두고 App이 상속한다."""
 import ctypes
 import json
 import logging
 import os
 import shutil
 import sys
-import uuid
 import webbrowser
 import winreg
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from logging.handlers import RotatingFileHandler
 
 from PySide6.QtCore import QLockFile, QObject, QPoint, QRect, Qt, QTimer, Signal
@@ -20,26 +19,24 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QMenu, QMessageBox, QSy
 from . import config, desktop
 from .cards import CountdownCard, default_position
 from .config import CELLS_PATH, CLIENT_SECRET_PATH, DEFAULTS, LOCAL_ONLY_KEYS, Config, load_json, save_json
-from .dialogs import (DatePickDialog, EventDialog, MobileDialog, TaskDialog, ask_scope, bring_to_front,
-                      color_icon, repeat_dates)
-from .editor import CellEditor
-from .gcal import ApiDisabledError, AuthError, GCal, event_props, is_holiday_calendar, validate_client_secret
+from .dialogs import DatePickDialog, MobileDialog, bring_to_front, color_icon
+from .editing import EditMixin
+from .gcal import ApiDisabledError, AuthError, GCal, is_holiday_calendar, validate_client_secret
 from .hotkeys import Hotkeys
 from .jobs import Outbox, is_offline
-from .model import Event, EventStore
+from .model import EventStore
 from .mousehook import ClickThrough
 from .reminders import Reminders
+from .sync import SyncMixin
+from .tasks import TaskMixin
 from .themes import PRESETS, capture, theme_values
 from .view import CalendarWindow
-from .widgets import app_icon, apply_ui_theme, color_menu, play_sound
-from .widgets import confirm as ask_confirm
+from .widgets import app_icon, apply_ui_theme, color_menu
 
 log = logging.getLogger("xetical")
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 RUN_NAME = "Xetical"
-FETCH_MARGIN = timedelta(days=42)
 HK_TOGGLE, HK_CONTENT = 1, 2
-UNDO_LIMIT = 50
 PAGE_ACCOUNT, PAGE_ABOUT = 5, 6  # 설정 창 페이지 번호
 
 # 이 설정이 바뀌면 표시 범위가 달라지므로 오늘 기준으로 다시 맞춘다
@@ -79,15 +76,7 @@ def autostart_command():
     return f'"{exe}" "{config.BASE_DIR / "main.pyw"}"'
 
 
-def new_tmp():
-    return f"tmp-{uuid.uuid4().hex[:12]}"
-
-
-def months(n):
-    return timedelta(days=31 * n)
-
-
-class App(QObject):
+class App(SyncMixin, EditMixin, TaskMixin, QObject):
     def __init__(self):
         super().__init__()
         self.cfg = Config.load()
@@ -560,114 +549,6 @@ class App(QObject):
             return want
         return next((c["id"] for c in writable if c["primary"]), writable[0]["id"] if writable else "")
 
-    # ---------- 동기화 ----------
-    def sync(self):
-        if not self.gcal.has_token():
-            return
-        if len(self.outbox):  # 보낼 변경이 남아 있으면 먼저 보내고 받는다(다 보내면 drained에서 다시 부른다)
-            self.outbox.process()
-            return
-        if self._syncing:
-            self._sync_again = True
-            return
-        a, b = self.win.view_range()
-        today = date.today()
-        lo = min(a - FETCH_MARGIN, today - months(self.cfg["sync_past_months"]))
-        hi = max(b + FETCH_MARGIN, today + months(self.cfg["sync_future_months"]))
-        self._syncing = True
-        self.win.cloud_state = "syncing"
-        self.win.update()
-        self.worker.submit(self.gcal.fetch_all, lo, hi, self.cfg["show_holidays"], self.cfg["holiday_region"],
-                           callback=self._on_synced)
-
-    def _on_synced(self, res, err):
-        self._syncing = False
-        if err:
-            self.win.cloud_state = "login" if isinstance(err, AuthError) else "error"
-            if isinstance(err, AuthError):
-                self.set_status(f"{err} — 여기를 클릭", True)
-            elif isinstance(err, ApiDisabledError):
-                self._fix_url = err.url
-                self.set_status("Google Calendar API가 꺼져 있음 — 여기를 클릭해 '사용' 누르기", True)
-            else:
-                self.set_status("동기화 실패 (인터넷 연결 확인)")
-        elif len(self.outbox):
-            # 받는 동안 새 변경이 줄을 섰다. 이 결과에는 그 변경이 없어서 화면에 반영해 둔 것을 덮어 버리므로 버린다.
-            # (다 보내면 drained에서 다시 받는다)
-            self.win.cloud_state = "ok"
-        else:
-            calendars, events, holidays, rng, countdowns, tasks_status = res
-            self.store.set(calendars, events, holidays, rng)
-            self._project_task_repeats()
-            self.win.countdowns = nearest_countdowns(countdowns)
-            self._last_sync = datetime.now()
-            self.win.cloud_state = "ok"
-            self.set_status("")
-            # 할 일은 캘린더와 따로 받는다. 문제가 있으면 알려 주되 캘린더 표시는 그대로 둔다.
-            if tasks_status == "scope":
-                self.set_status("할 일을 보려면 다시 로그인 — 여기를 클릭", True)
-            elif isinstance(tasks_status, tuple):
-                self._fix_url = tasks_status[1]
-                self.set_status("Google Tasks API가 꺼져 있음 — 여기를 클릭해 '사용' 누르기", True)
-            try:
-                self.store.save_cache()
-            except OSError:
-                log.exception("캐시 저장 실패")
-            self._refresh_cards()
-            self._auto_delay()
-            self._reselect()
-            if self._dayview is not None and self._dayview.isVisible():
-                self._dayview.refresh()
-        self.win.update()
-        if self._sync_again:
-            self._sync_again = False
-            self.sync()
-
-    def _reselect(self):
-        """동기화로 일정 객체가 새로 바뀌어도 선택은 유지한다."""
-        sel = self.win.selected_event
-        if sel is not None:
-            self.win.selected_event = next((e for e in self.store.events if e.id == self.outbox.real_id(sel.id)), None)
-
-    def _on_navigated(self):
-        if not self.store.covers(*self.win.view_range()):
-            self.sync()
-
-    def _on_outbox_drained(self):
-        if self.win.status.startswith("오프라인"):
-            self.set_status("")
-        self.sync()
-
-    def _on_outbox_blocked(self, err):
-        self.win.cloud_state = "error"
-        if isinstance(err, AuthError):
-            self.set_status(f"{err} — 여기를 클릭", True)
-        elif isinstance(err, ApiDisabledError):
-            self._fix_url = err.url
-            self.set_status(f"{err.api}가 꺼져 있음 — 여기를 클릭해 '사용' 누르기", True)
-        else:
-            self.set_status(f"오프라인 — 변경 {len(self.outbox)}개 저장 대기 중 (연결되면 자동으로 보내요)")
-        self.win.update()
-
-    def _on_outbox_failed(self, label, err):
-        QMessageBox.warning(None, "Xetical", f"구글에 저장하지 못한 변경이 있어 취소했습니다: {label}\n\n"
-                                             f"{type(err).__name__}: {err}")
-
-    def _auto_delay(self):
-        """미완료 작업 자동 연기: 지난 30일 안의 완료하지 않은 줄 일정을 오늘로 옮긴다."""
-        if not self.cfg["auto_delay"]:
-            return
-        today = date.today()
-        ops = []
-        for ev in self.store.events:
-            if ev.line and not ev.done and ev.writable and ev.all_day and not ev.recurring \
-                    and today - timedelta(days=30) <= ev.start < today and ev.id not in self._delayed_today:
-                self._delayed_today.add(ev.id)
-                ops.append(("patch", ev.calendar_id, ev.id, {"start": {"date": today.isoformat()},
-                                                             "end": {"date": (today + timedelta(days=1)).isoformat()}}))
-        if ops:
-            self.outbox.add("apply_ops", ops, label="미완료 작업 자동 연기")
-
     # ---------- 카운트다운 카드 ----------
     def _refresh_cards(self):
         want = {}
@@ -757,28 +638,7 @@ class App(QObject):
         self.win.cloud_state = "login"
         self.set_status("구글 로그인 필요 — 여기를 클릭", True)
 
-    # ---------- 되돌리기(1-3) ----------
-    def push_undo(self, label, jobs, local=None):
-        """jobs = [(작업 이름, [인자…], [임시 id…])] — 되돌릴 때 보낼 반대 작업."""
-        if not jobs and local is None:
-            return
-        self.undo_stack.append({"label": label, "jobs": jobs, "local": local})
-        del self.undo_stack[:-UNDO_LIMIT]
-
-    def undo(self):
-        if not self.undo_stack:
-            self.flash("되돌릴 작업이 없어요")
-            return
-        item = self.undo_stack.pop()
-        for op, args, tmps in item["jobs"]:
-            self.outbox.add(op, *args, tmps=tmps, label=f"실행 취소: {item['label']}")
-        if item["local"]:
-            item["local"]()
-        self.flash(f"실행 취소: {item['label']}")
-        if item["jobs"]:
-            self.sync()
-
-    # ---------- 일정 편집 ----------
+    # ---------- 공용 도우미 ----------
     def _keep(self, dlg):
         self._dialogs.append(dlg)
         dlg.destroyed.connect(lambda *_: self._dialogs.remove(dlg) if dlg in self._dialogs else None)
@@ -791,406 +651,6 @@ class App(QObject):
             return False
         self.status_action()
         return True
-
-    def _real(self, ev):
-        """예정(가상) 할 일이면 진짜 할 일, 아니면 그대로."""
-        if ev is not None and ev.virtual:
-            return next((e for e in self.store.events if e.id == ev.source_id), None)
-        return ev
-
-    def _add_temp(self, ev):
-        self.store.events.append(ev)
-        self.store.reindex()
-        self.win.update()
-
-    def _remove_local(self, ev_id):
-        self.store.events = [e for e in self.store.events if e.id != ev_id]
-        self.store.reindex()
-        self.win.update()
-
-    @staticmethod
-    def _event_from_values(ev_id, v):
-        if v["all_day"]:
-            start, end = v["start"], v["end"] + timedelta(days=1)
-        else:
-            start, end = v["start"], v["end"]
-        return Event(id=ev_id, calendar_id=v["calendar_id"], title=v["title"], start=start, end=end,
-                     all_day=v["all_day"], done=v.get("done", False), text_color=v.get("text_color", ""),
-                     order=v.get("order", 0), line=v.get("line", False), alarm=v.get("alarm", ""),
-                     countdown=v.get("countdown", ""), description=v.get("description", ""),
-                     location=v.get("location", ""), recurring=bool(v.get("recurrence")))
-
-    def open_cell_editor(self, day, rect):
-        if self._need_login():
-            return
-        if self._editor is not None:
-            self._editor.save_and_close()
-        ed = CellEditor(self.cfg, self.store, day, rect, self.default_calendar(), self.cfg["recent_colors"])
-        ed.committed.connect(self.apply_cell)
-        ed.openEvent.connect(self.edit_event)
-        ed.newStructured.connect(lambda d, kind: self.new_event(d, kind))
-        ed.cellColorPicked.connect(self.set_cell_color)
-        ed.destroyed.connect(lambda *_: setattr(self, "_editor", None))
-        self._editor = ed
-        bring_to_front(ed)
-        ed.edit.setFocus()
-
-    def apply_cell(self, day, ops, lines, series):
-        """셀 편집 결과를 화면에 먼저 반영하고, 구글에는 보낼 편지함으로 보낸다. 되돌리기용 반대 작업도 만든다."""
-        self.cfg.save()  # 편집창 크기·최근 색
-        by_id = {e.id: copy.copy(e) for e in self.store.events}
-        tmps = [new_tmp() for op in ops if op[0] == "create"]
-        inverse, inv_tmps = [], []
-        for op in ops:
-            if op[0] == "patch" and op[2] in by_id:
-                old = by_id[op[2]]
-                body = {"extendedProperties": {"private": event_props(
-                    {"done": old.done, "text_color": old.text_color, "order": old.order, "line": old.line,
-                     "alarm": old.alarm, "countdown": old.countdown})}}
-                if "summary" in op[3]:
-                    body["summary"] = old.title
-                inverse.append(("patch", op[1], op[2], body))
-            elif op[0] == "delete" and op[2] in by_id and not by_id[op[2]].recurring:
-                t = new_tmp()
-                inv_tmps.append(t)
-                inverse.append(("create", op[1], by_id[op[2]].values()))
-        inverse += [("delete", op[1], t) for op, t in zip([o for o in ops if o[0] == "create"], tmps)]
-
-        removed = {op[2] for op in ops if op[0] == "delete"}
-        self.store.events = [e for e in self.store.events if e.id not in removed]
-        live = {e.id: e for e in self.store.events}
-        for i, ln in enumerate(lines):
-            ev = ln["ev"]
-            if ev and ev.id in live:
-                e = live[ev.id]
-                e.title, e.done, e.text_color, e.order = ln["text"], ln["done"], ln["color"], i
-        it = iter(tmps)
-        for op in ops:
-            if op[0] == "create":
-                v = op[2]
-                self.store.events.append(self._event_from_values(next(it), v))
-        self.store.reindex()
-        self.win.update()
-        if ops:
-            self.outbox.add("apply_ops", ops, tmps=tmps, label="칸 편집")
-        for job in series:
-            self.outbox.add(job[0], *job[1:], label="반복 일정 편집")
-        if inverse:
-            self.push_undo("칸 편집", [("apply_ops", [inverse], inv_tmps)])
-
-    def new_event(self, day, focus=None, start_time=None):
-        if self._need_login():
-            return
-        dlg = EventDialog(self.store.calendars, day=day, default_cal=self.default_calendar(), focus=focus,
-                          cfg=self.cfg, start_time=start_time)
-
-        def done():
-            v = dlg.values()
-            tmp = new_tmp()
-            ev = self._event_from_values(tmp, v)
-            self._add_temp(ev)
-            self.outbox.add("create_event", v, tmps=[tmp], label="새 일정")
-            self.push_undo("새 일정", [("delete_event", [ev, "one"], [])])
-        dlg.accepted.connect(done)
-        self._keep(dlg)
-
-    def edit_event(self, ev):
-        if ev.id.startswith("tmp-"):
-            return  # 아직 구글에 올라가는 중
-        ev = self._real(ev)  # 예정 표시를 누르면 실제 할 일(지금 차례)을 연다
-        if ev is None:
-            return
-        if ev.task_list:
-            self._open_task_dialog(ev)
-        elif ev.recurring:  # 반복 규칙은 원본에서 읽어 와야 한다
-            self.set_status("반복 일정 불러오는 중…")
-            self.worker.submit(self.gcal.get_rrule, ev, callback=lambda r, e: self._rrule_loaded(ev, r, e))
-        else:
-            self._open_event_dialog(ev, "")
-
-    def _rrule_loaded(self, ev, res, err):
-        if err is not None:  # 규칙을 모르는 채로 열면 '반복 안 함'으로 보여 저장할 때 반복이 지워질 수 있다
-            self.set_status("반복 일정을 불러오지 못했습니다 (인터넷 연결 확인)")
-            return
-        self.set_status("")
-        self._open_event_dialog(ev, res[0])
-
-    def _open_event_dialog(self, ev, rrule):
-        dlg = EventDialog(self.store.calendars, event=ev, rrule=rrule, cfg=self.cfg)
-
-        def done():
-            if dlg.action == "save":
-                scope = "one"
-                if ev.recurring:
-                    scope = ask_scope(None, "수정", allow_one=not dlg.recurrence_changed())
-                    if not scope:
-                        return
-                v = dlg.values()
-                self.outbox.add("update_event", ev, v, scope, label="일정 수정")
-                if scope == "one" and v["calendar_id"] == ev.calendar_id:
-                    after = self._event_from_values(ev.id, v)
-                    after.recurring, after.recurring_event_id = ev.recurring, ev.recurring_event_id
-                    self.push_undo("일정 수정", [("update_event", [after, ev.values(), "one"], [])])
-                self.sync()
-            elif dlg.action == "delete":
-                self.delete_event(ev)
-            elif dlg.action and dlg.action.startswith("respond:"):
-                self.respond(ev, dlg.action.split(":", 1)[1])
-        dlg.accepted.connect(done)
-        self._keep(dlg)
-
-    def delete_event(self, ev, confirm=False):
-        if ev.task_list:
-            return self.delete_task(ev, confirm)
-        if confirm and not ask_confirm(None, f"'{ev.title}' 일정을 삭제할까요?"):
-            return
-        scope = ask_scope(None, "삭제") if ev.recurring else "one"
-        if not scope:
-            return
-        if scope == "one":
-            self._remove_local(ev.id)
-        self.outbox.add("delete_event", ev, scope, label="일정 삭제")
-        if not ev.recurring:
-            t = new_tmp()
-            self.push_undo("일정 삭제", [("create_event", [ev.values()], [t])])
-        self.sync()
-
-    def respond(self, ev, status):
-        """초대 응답(1-11)."""
-        old = ev.response
-        ev.response = status
-        self.win.update()
-        self.outbox.add("respond_event", ev, status, label="초대 응답")
-        self.push_undo("초대 응답", [("respond_event", [ev, old], [])])
-
-    def move_event(self, ev, delta):
-        """끌어서 다른 날로 옮기기(1-7)."""
-        if not delta or ev.virtual or ev.id.startswith("tmp-"):
-            return
-        before = copy.copy(ev)
-        d = timedelta(days=delta)
-        ev.start, ev.end = ev.start + d, ev.end + d
-        self.store.reindex()
-        self.win.update()
-        self.outbox.add("move_event", before, delta, label="일정 옮기기")
-        self.push_undo("일정 옮기기", [("move_event", [copy.copy(ev), -delta], [])])
-        self.flash(f"'{ev.title}' → {ev.first_day:%m/%d}")
-
-    # ---------- 복사·붙여넣기(2-4) ----------
-    def copy_selected(self):
-        ev = self._real(self.win.selected_event)
-        if ev is None:
-            self.flash("복사할 일정을 먼저 눌러 선택하세요")
-            return
-        self.clip = copy.copy(ev)
-        QGuiApplication.clipboard().setText(ev.title)
-        self.flash(f"복사: {ev.title}")
-
-    def _removable_selection(self):
-        """Delete·Ctrl+X 대상. 우클릭 메뉴처럼 '예정'과 읽기 전용 일정은 지울 수 없다."""
-        sel = self.win.selected_event
-        if sel is None:
-            return None
-        if sel.virtual or not (sel.writable or sel.task_list):
-            self.flash("예정 표시나 읽기 전용 일정은 지울 수 없습니다" if sel.virtual else "읽기 전용 일정은 지울 수 없습니다")
-            return None
-        return self._real(sel)
-
-    def cut_selected(self):
-        ev = self._removable_selection()
-        if ev is None:
-            return
-        self.copy_selected()
-        self.delete_event(ev)
-
-    def delete_selected(self):
-        ev = self._removable_selection()
-        if ev is not None:
-            self.delete_event(ev, confirm=True)
-
-    def paste(self, day):
-        if self.clip is None or day is None:
-            return
-        src = self.clip
-        if src.task_list:
-            tmp = new_tmp()
-            self._add_temp(Event(id=tmp, calendar_id=src.calendar_id, title=src.title, start=day,
-                                 end=day + timedelta(days=1), all_day=True, task_list=src.task_list,
-                                 description=src.description))
-            self.outbox.add("create_task", src.task_list, src.title, src.description, day, tmps=[tmp], label="붙여넣기")
-            self.push_undo("붙여넣기", [("delete_task", [Event(id=tmp, calendar_id=src.calendar_id, title=src.title,
-                                                               start=day, end=day, all_day=True,
-                                                               task_list=src.task_list)], [])])
-            return
-        v = src.values()
-        delta = day - src.first_day
-        v["start"], v["end"] = v["start"] + delta, v["end"] + delta
-        writable = {c["id"] for c in self.store.calendars if c["writable"]}
-        if v["calendar_id"] not in writable:
-            v["calendar_id"] = self.default_calendar()
-        tmp = new_tmp()
-        ev = self._event_from_values(tmp, v)
-        self._add_temp(ev)
-        self.outbox.add("create_event", v, tmps=[tmp], label="붙여넣기")
-        self.push_undo("붙여넣기", [("delete_event", [ev, "one"], [])])
-        self.flash(f"붙여넣기: {src.title} → {day:%m/%d}")
-
-    # ---------- 할 일 ----------
-    def task_lists(self):
-        return [c for c in self.store.calendars if c.get("tasks")]
-
-    def toggle_task(self, ev):
-        """칸에서 ☐를 누르면 바로 완료/미완료(1-1).
-        반복 할 일은 구글 API가 다음 회차를 만들어 주지 않으므로 Xetical이 만든다:
-        - 지금 회차를 완료하면 다음 회차(할 일)를 새로 만든다.
-        - 흐린 '예정'을 누르면 그 날짜의 회차를 '완료된 할 일'로 만든다."""
-        if ev.virtual:
-            return self._complete_projection(ev)
-        if ev.id.startswith("tmp-"):
-            return
-        old = ev.done
-        ev.done = not old
-        jobs = [("set_task_done", [ev, old], [])]
-        self.outbox.add("set_task_done", ev, ev.done, label="할 일 완료" if ev.done else "할 일 미완료")
-        if ev.done:
-            play_sound(self.cfg["done_sound"])
-            jobs += self._create_next_occurrence(ev)
-        self.push_undo("할 일 완료" if ev.done else "할 일 미완료", jobs)
-        self._after_task_change()
-
-    def _task_rule(self, ev):
-        return self.cfg["task_repeats"].get(self._task_key(ev.task_list, ev.title))
-
-    def _series(self, ev):
-        """같은 목록·같은 이름의 할 일들(반복 할 일의 회차들)."""
-        return [e for e in self.store.events if e.task_list == ev.task_list and e.title == ev.title and not e.virtual]
-
-    def _create_next_occurrence(self, ev):
-        """반복 할 일의 다음 회차를 진짜 할 일로 만든다. 이미 그 날짜(또는 그 뒤) 회차가 있으면 만들지 않는다.
-        되돌리기용 반대 작업 목록을 돌려준다."""
-        rule = self._task_rule(ev)
-        nxt = repeat_dates(ev.start, rule, ev.start + timedelta(days=400))[:1] if rule else []
-        if not nxt or any(e.first_day >= nxt[0] for e in self._series(ev)):
-            return []
-        d = nxt[0]
-        tmp = new_tmp()
-        new = Event(id=tmp, calendar_id=ev.calendar_id, title=ev.title, start=d, end=d + timedelta(days=1),
-                    all_day=True, color=ev.color, task_list=ev.task_list, description=ev.description)
-        self._add_temp(new)
-        self.outbox.add("create_task", ev.task_list, ev.title, ev.description, d, tmps=[tmp], label="반복 할 일 다음 회차")
-        self.flash(f"'{ev.title}' 완료 — 다음 회차 {d:%m/%d} 할 일을 만들었어요")
-        return [("delete_task", [new], [])]
-
-    def _complete_projection(self, ev):
-        """흐린 '예정'을 누름 → 그 날짜 회차를 완료된 할 일로 만든다."""
-        src = self._real(ev)
-        if src is None:
-            return
-        tmp = new_tmp()
-        done = Event(id=tmp, calendar_id=ev.calendar_id, title=ev.title, start=ev.start, end=ev.end, all_day=True,
-                     color=ev.color, task_list=ev.task_list, description=src.description, done=True)
-        self._add_temp(done)
-        play_sound(self.cfg["done_sound"])
-        self.outbox.add("create_task", ev.task_list, ev.title, src.description, ev.start, True, tmps=[tmp],
-                        label="반복 할 일 완료")
-        self.push_undo("반복 할 일 완료", [("delete_task", [done], [])])
-        self.flash(f"'{ev.title}' {ev.first_day:%m/%d} 회차 완료")
-        self._after_task_change()
-
-    def _after_task_change(self):
-        self._project_task_repeats()
-        if self._dayview is not None and self._dayview.isVisible():
-            self._dayview.refresh()
-
-    def new_task(self, day):
-        if self._need_login():
-            return
-        lists = self.task_lists()
-        if not lists:
-            QMessageBox.information(None, "Xetical", "할 일 목록을 불러오지 못했습니다.\n"
-                                                     "달력 위쪽 안내 문구를 눌러 다시 로그인하거나 Tasks API를 켜 주세요.")
-            return
-        dlg = TaskDialog(lists, day=day)
-
-        def done():
-            v = dlg.values()
-            self._remember_task_repeat(v["list_id"], v["title"], v["repeat"])
-            tmp = new_tmp()
-            ev = Event(id=tmp, calendar_id=f"tasks:{v['list_id']}", title=v["title"], start=v["due"],
-                       end=v["due"] + timedelta(days=1), all_day=True, task_list=v["list_id"], description=v["notes"])
-            self._add_temp(ev)
-            self.outbox.add("create_task", v["list_id"], v["title"], v["notes"], v["due"], tmps=[tmp], label="새 할 일")
-            self.push_undo("새 할 일", [("delete_task", [ev], [])])
-        dlg.accepted.connect(done)
-        self._keep(dlg)
-
-    @staticmethod
-    def _task_key(list_id, title):
-        return f"{list_id}|{title}"
-
-    def _remember_task_repeat(self, list_id, title, rule, old_title=None):
-        reps = self.cfg["task_repeats"]
-        if old_title is not None and old_title != title:
-            reps.pop(self._task_key(list_id, old_title), None)
-        if rule and rule != "none":
-            reps[self._task_key(list_id, title)] = rule
-        else:
-            reps.pop(self._task_key(list_id, title), None)
-        self.cfg.save()
-
-    def _project_task_repeats(self):
-        """반복 할 일: 가장 최근 회차(완료했든 안 했든) 뒤로 앞으로의 회차를 흐린 '예정'으로 덧붙인다."""
-        self.store.events = [e for e in self.store.events if not e.virtual]
-        reps = self.cfg["task_repeats"]
-        if reps and self.store.range:
-            until = self.store.range[1]
-            latest = {}
-            for ev in self.store.events:
-                if ev.task_list and self._task_key(ev.task_list, ev.title) in reps:
-                    key = self._task_key(ev.task_list, ev.title)
-                    if key not in latest or ev.start > latest[key].start:
-                        latest[key] = ev
-            for key, ev in latest.items():
-                for i, d in enumerate(repeat_dates(ev.start, reps[key], until)):
-                    self.store.events.append(Event(
-                        id=f"vtask:{i}:{ev.id}", calendar_id=ev.calendar_id, title=ev.title, start=d,
-                        end=d + timedelta(days=1), all_day=True, color=ev.color, task_list=ev.task_list,
-                        virtual=True, source_id=ev.id, writable=False))
-        self.store.reindex()
-        self.win.update()
-
-    def _open_task_dialog(self, ev):
-        rule = self.cfg["task_repeats"].get(self._task_key(ev.task_list, ev.title), "none")
-        dlg = TaskDialog(self.task_lists(), event=ev, repeat=rule)
-
-        def done():
-            v = dlg.values()
-            if dlg.action == "save":
-                old = (ev.title, ev.description, ev.start, ev.done)
-                self._remember_task_repeat(ev.task_list, v["title"], v["repeat"], old_title=ev.title)
-                self.outbox.add("update_task", ev, v["title"], v["notes"], v["due"], v["done"], label="할 일 수정")
-                jobs = [("update_task", [ev, *old], [])]
-                became_done = v["done"] and not ev.done
-                ev.title, ev.description, ev.done = v["title"], v["notes"], v["done"]
-                ev.start, ev.end = v["due"], v["due"] + timedelta(days=1)
-                if became_done:  # 창에서 '완료'를 체크해도 반복 할 일의 다음 회차를 만든다
-                    jobs += self._create_next_occurrence(ev)
-                self.push_undo("할 일 수정", jobs)
-                self._project_task_repeats()
-                self.sync()
-            elif dlg.action == "delete":
-                self.delete_task(ev)
-        dlg.accepted.connect(done)
-        self._keep(dlg)
-
-    def delete_task(self, ev, confirm=False):
-        if confirm and not ask_confirm(None, f"'{ev.title}' 할 일을 삭제할까요?"):
-            return
-        self._remove_local(ev.id)
-        self._project_task_repeats()
-        self.outbox.add("delete_task", ev, label="할 일 삭제")
-        t = new_tmp()
-        self.push_undo("할 일 삭제", [("create_task", [ev.task_list, ev.title, ev.description, ev.start, ev.done], [t])])
 
     # ---------- 도구 ----------
     def open_day_view(self, d):
@@ -1272,24 +732,6 @@ def fit_rect(rect):
     x = min(max(rect.x(), a.left()), a.right() - w + 1)
     y = min(max(rect.y(), a.top()), a.bottom() - h + 1)
     return QRect(x, y, w, h)
-
-
-def nearest_countdowns(events):
-    """반복 카운트다운은 가장 가까운 회차 하나만 남긴다(N일 경과 형식은 가장 최근 지난 회차)."""
-    today = date.today()
-    groups = {}
-    for ev in events:
-        groups.setdefault(ev.recurring_event_id or ev.id, []).append(ev)
-    out = []
-    for evs in groups.values():
-        fmt = evs[0].countdown_parts()[2] if evs[0].countdown_parts() else "left"
-        future = sorted((e for e in evs if e.first_day >= today), key=lambda e: e.first_day)
-        past = sorted((e for e in evs if e.first_day < today), key=lambda e: e.first_day)
-        if fmt == "passed" and past:
-            out.append(past[-1])
-        else:
-            out.append(future[0] if future else past[-1])
-    return sorted(out, key=lambda e: e.first_day)
 
 
 def main():

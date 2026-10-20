@@ -6,15 +6,15 @@
 """
 from datetime import timedelta
 
-from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QKeySequence, QShortcut, QTextBlockFormat, QTextCharFormat, QTextCursor
-from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QMenu, QPushButton, QSizeGrip, QTextEdit,
+from PySide6.QtCore import QPoint, QRect, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QKeySequence, QShortcut, QTextBlockFormat, QTextCharFormat, QTextCursor
+from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QPushButton, QSizeGrip, QTextEdit,
                                QToolButton, QVBoxLayout, QWidget)
 
 from .dialogs import ask_scope
 from .gcal import event_props
 from .view import make_font
-from .widgets import color_menu, play_sound, swatch_icon
+from .widgets import color_menu, play_sound
 
 WEEKDAYS = "월화수목금토일"
 

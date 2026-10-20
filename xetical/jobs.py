@@ -62,6 +62,10 @@ def resolve(o, id_map):
     return o
 
 
+def new_tmp():
+    return f"tmp-{uuid.uuid4().hex[:12]}"
+
+
 def is_offline(e):
     """다시 시도하면 될 오류(인터넷 끊김·구글 서버 일시 장애·요청 한도 초과)인가."""
     if isinstance(e, HttpError):

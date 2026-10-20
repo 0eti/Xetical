@@ -1,7 +1,7 @@
 """☰ 메뉴의 도구들: 내용 검색, 내보내기, 인쇄."""
 import csv
 import os
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPageLayout
@@ -10,8 +10,7 @@ from PySide6.QtWidgets import (QComboBox, QDateEdit, QDialog, QDialogButtonBox, 
                                QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
                                QTreeWidget, QTreeWidgetItem, QVBoxLayout)
 
-from .dialogs import color_icon, from_qdate, to_qdate
-from .gcal import is_holiday_calendar
+from .dialogs import from_qdate, to_qdate
 from .widgets import ColorButton
 
 WEEKDAYS = "월화수목금토일"
