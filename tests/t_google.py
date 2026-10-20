@@ -12,6 +12,7 @@ qapp = QApplication([])
 import xetical.jobs as J
 J.OUTBOX_PATH = SP / "outbox_g.json"
 J.OUTBOX_PATH.unlink(missing_ok=True)
+from googleapiclient.errors import HttpError
 from xetical.gcal import GCal, event_props
 from xetical.model import Event
 
@@ -49,8 +50,12 @@ def cleanup():
                                   timeMin="2026-12-01T00:00:00Z", timeMax="2027-03-01T00:00:00Z").execute().get("items", [])
         for it in items:
             if (it.get("summary") or "").startswith(P):
-                svc.events().delete(calendarId=cal["id"], eventId=it["id"]).execute()
-                n += 1
+                try:
+                    svc.events().delete(calendarId=cal["id"], eventId=it["id"]).execute()
+                    n += 1
+                except HttpError as e:  # 원본을 먼저 지우면 따로 고친 회차는 이미 지워져 있다(410)
+                    if e.resp.status not in (404, 410):
+                        raise
     if g.has_tasks_scope():
         ts = g._tasks()
         for tl in ts.tasklists().list().execute().get("items", []):
@@ -64,6 +69,8 @@ def cleanup():
 cals = g.fetch_all(*RANGE, want_holidays=False)[0]
 CAL = next(c["id"] for c in cals if c["primary"])
 print("시작 전 정리:", cleanup(), "개", flush=True)
+if "--cleanup" in sys.argv:  # 정리만 하고 끝낸다
+    sys.exit(0)
 try:
   try:
       # ---------- 일정 만들기·속성 ----------
