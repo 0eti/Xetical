@@ -975,10 +975,11 @@ class CalendarWindow(QWidget):
         if not self.adjusting:
             self.activate_keys()
         mood = None if self.adjusting else self.mood.hit(pos)
-        if mood:  # 트래커: 이름을 누르면 바꾸고, 칸을 누르면(왼쪽·오른쪽 모두) 색 고르기
+        if mood:  # 트래커: 이름을 누르면 바꾸고, 칸은 더블클릭(또는 오른쪽 클릭)해야 색 고르기(실수로 칠하지 않게)
             if mood[0] == "tab" and button == Qt.LeftButton:
                 self.moodTrackerChosen.emit(mood[1])
-            elif mood[0] == "box":
+            elif mood[0] == "box" and (button == Qt.RightButton or
+                                       (button == Qt.LeftButton and self._is_second_click(pos))):
                 self.moodMenuRequested.emit(mood[1], gpos)
             return
         if button == Qt.RightButton and not self.adjusting:
@@ -1066,6 +1067,11 @@ class CalendarWindow(QWidget):
         if button != Qt.LeftButton or self.adjusting:
             return
         if self._button_at(pos) or self._in_header(pos) or self._check_at(pos):
+            return
+        mood = self.mood.hit(pos)  # 아이콘 클릭 통과 모드: 마우스 훅이 더블클릭을 여기로 바로 보낸다
+        if mood:
+            if mood[0] == "box":
+                self.moodMenuRequested.emit(mood[1], self.mapToGlobal(pos.toPoint()))
             return
         d = self._day_at(pos)
         if d:

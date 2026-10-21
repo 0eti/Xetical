@@ -134,7 +134,8 @@ DEFAULTS = {
     "custom_themes": {},           # 내 테마 {이름: {설정…}}
     # 트래커(무드 트래커 등): 달력 아래 올해 365칸에 날마다 색을 칠한다. 구글과 동기화하지 않는다.
     "mood_on": False,
-    "mood_layout": "week",         # week = 7줄(요일)×53주, month = 12줄(월)×31칸
+    "mood_layout": "week",         # week = 7줄×53열, month = 12줄(월)×31칸
+    "mood_week_from": "jan1",      # 주 단위 배치: jan1 = 1월 1일부터 왼쪽 위에서 차례로, weekday = 줄이 요일
     "mood_trackers": [
         {"id": "mood", "name": "기분", "colors": [
             {"color": "#00b050", "label": "좋음"}, {"color": "#ffc000", "label": "보통"},

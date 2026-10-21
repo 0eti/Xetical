@@ -94,17 +94,31 @@ check("주 단위: 7줄 × 53~54열, 올해 날짜가 모두 다른 칸", rows =
       and len({place(d) for d in MD.MoodPanel.year_days(T.year)}) == days_in_year, (rows, cols))
 check("주 단위: 칸이 달력 창 안에 들어감", all(w.rect().contains(r.toRect()) for r, _ in w.mood.boxes))
 check("트래커 이름 탭 2개", [t for _, t in w.mood.tabs] == ["mood", "workout"])
+jan1 = date(T.year, 1, 1)
+check("주 단위 기본: 1월 1일이 왼쪽 위, 위→아래로 차례", place(jan1) == (0, 0) and place(jan1 + timedelta(days=1)) == (1, 0)
+      and place(jan1 + timedelta(days=7)) == (0, 1) and cols == 53, (place(jan1), cols))
+a.cfg["mood_week_from"] = "weekday"
+rows_w, cols_w, place_w = w.mood.grid(a.cfg, T.year)
+check("주 단위 '요일 줄에 맞춤': 1월 1일은 그 요일 줄", place_w(jan1) == ((jan1.weekday() - a.cfg["week_start"]) % 7, 0)
+      and len({place_w(d) for d in MD.MoodPanel.year_days(T.year)}) == days_in_year, place_w(jan1))
+a.cfg["mood_week_from"] = "jan1"
+paint()
 
-# ---------- 오늘 칸을 누르면 색 고르기 ----------
+# ---------- 칸은 더블클릭해야 색 고르기 ----------
 asked = []
 w.moodMenuRequested.disconnect()
 w.moodMenuRequested.connect(lambda d, pos: asked.append(d))
 today_rect = next(r for r, d in w.mood.boxes if d == T)
 w.on_press(today_rect.center(), QPoint(0, 0), Qt.LeftButton)
-check("오늘 칸을 누르면 색 고르기 요청", asked == [T], asked)
+check("한 번 클릭으로는 색 고르기가 뜨지 않음", asked == [], asked)
+w.on_press(today_rect.center(), QPoint(0, 0), Qt.LeftButton)
+check("더블클릭하면 색 고르기", asked == [T], asked)
+w._last_click = (0.0, w._last_click[1])
+w.on_double(today_rect.center(), Qt.LeftButton)
+check("아이콘 클릭 통과 모드의 더블클릭도 색 고르기", asked == [T, T], asked)
 check("앞으로의 날은 누를 수 없음", all(d <= T for _, d in w.mood.boxes))
 w.on_press(today_rect.center(), QPoint(0, 0), Qt.RightButton)
-check("오른쪽 클릭도 색 고르기", asked == [T, T], asked)
+check("오른쪽 클릭도 색 고르기", asked == [T, T, T], asked)
 
 # 메뉴로 색 칠하기
 shown = []

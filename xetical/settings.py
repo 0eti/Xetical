@@ -111,7 +111,7 @@ class TrackerEditor(QWidget):
         self.add_color = QPushButton("색 추가")
         self.add_color.clicked.connect(self._add_color)
         right = QVBoxLayout()
-        hint = QLabel("칸을 누르면 아래 색 중에서 고릅니다. 이름은 고르는 메뉴와, 칸에 마우스를 올렸을 때 보입니다.")
+        hint = QLabel("칸을 더블클릭하면 아래 색 중에서 고릅니다. 이름은 고르는 메뉴와, 칸에 마우스를 올렸을 때 보입니다.")
         hint.setObjectName("hint")
         hint.setWordWrap(True)
         right.addWidget(hint)
@@ -590,6 +590,9 @@ class SettingsWindow(QWidget):
               hint="올해 365일을 칸으로 보여 줍니다. 오늘과 지난 날 칸을 눌러 색을 칠합니다(기분, 운동 여부 등). "
                    "구글과 동기화하지 않고 이 PC에만 저장합니다.")
         p.row("모양", self.combo("mood_layout", [("week", "주 단위 (7줄 × 53주)"), ("month", "월 단위 (12줄 × 31일)")]))
+        p.row("1월 1일 위치 (주 단위)", self.combo("mood_week_from", [("jan1", "왼쪽 위부터 차례로"),
+                                                                ("weekday", "요일 줄에 맞춤")]),
+              hint="'요일 줄에 맞춤'이면 한 줄이 한 요일이라 요일별로 보기 좋지만, 1월 1일이 첫 열 중간에서 시작합니다.")
         p.section("트래커와 색")
         p.widget_row(TrackerEditor(self))
         return p

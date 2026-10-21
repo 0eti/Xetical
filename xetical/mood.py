@@ -2,9 +2,9 @@
 
 - 구글 캘린더와 동기화하지 않는다. 칠한 날은 이 PC의 data/moods.json에 {트래커 id: {"YYYY-MM-DD": "#색"}}으로 둔다.
 - 트래커 목록(이름·고를 색과 색 이름)은 설정 mood_trackers에 있다(설정 백업에 같이 들어간다).
-- 모양: week = 7줄(요일)×53열(주, GitHub 잔디처럼), month = 12줄(월)×31칸. 올해(1~12월)로 고정이다.
+- 모양: week = 7줄×53열(1월 1일부터 차례로, 또는 줄 = 요일), month = 12줄(월)×31칸. 올해(1~12월)로 고정이다.
   칸과 트래커 이름만 그린다(요일·월 이름, 색 범례 없음). 날짜와 색 이름은 마우스를 올리면 보인다.
-- 오늘과 지난 날만 칠할 수 있다.
+- 오늘과 지난 날만, 칸을 더블클릭(또는 오른쪽 클릭)해서 칠한다. 한 번 클릭으로는 칠하지 않는다.
 """
 from datetime import date, timedelta
 
@@ -79,7 +79,11 @@ class MoodPanel:
         """(줄 수, 열 수, 날짜 → (줄, 열))"""
         if cfg["mood_layout"] == "month":
             return 12, 31, lambda d: (d.month - 1, d.day - 1)
-        ws = cfg["week_start"]
+        if cfg["mood_week_from"] == "jan1":  # 1월 1일을 왼쪽 위에 두고 위→아래, 왼→오른쪽으로 7칸씩
+            jan1 = date(year, 1, 1)
+            cols = ((date(year, 12, 31) - jan1).days) // 7 + 1
+            return 7, cols, lambda d: ((d - jan1).days % 7, (d - jan1).days // 7)
+        ws = cfg["week_start"]  # 줄 = 요일(GitHub처럼): 1월 1일은 그 요일 줄에 놓이고 첫 열 위쪽은 빈다
         first = self._week_first(year, ws)
         cols = (date(year, 12, 31) - first).days // 7 + 1
         return 7, cols, lambda d: ((d.weekday() - ws) % 7, (d - first).days // 7)
