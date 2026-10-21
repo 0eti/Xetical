@@ -28,6 +28,7 @@ CLIENT_SECRET_PATH = DATA_DIR / "client_secret.json"
 TOKEN_PATH = DATA_DIR / "token.json"
 CACHE_PATH = DATA_DIR / "cache.json"
 CELLS_PATH = DATA_DIR / "cells.json"      # 날짜별 셀 배경색
+MOODS_PATH = DATA_DIR / "moods.json"      # 트래커: 트래커 id -> {날짜: 색}
 FIRED_PATH = DATA_DIR / "fired.json"      # 이미 띄운 알림
 OUTBOX_PATH = DATA_DIR / "outbox.json"    # 아직 구글에 못 보낸 변경(오프라인 대기)
 LOCK_PATH = DATA_DIR / "xetical.lock"
@@ -131,6 +132,16 @@ DEFAULTS = {
     "summary_time": "08:30",
     "summary_last": "",            # 마지막으로 요약을 띄운 날짜
     "custom_themes": {},           # 내 테마 {이름: {설정…}}
+    # 트래커(무드 트래커 등): 달력 아래 올해 365칸에 날마다 색을 칠한다. 구글과 동기화하지 않는다.
+    "mood_on": False,
+    "mood_layout": "week",         # week = 7줄(요일)×53주, month = 12줄(월)×31칸
+    "mood_trackers": [
+        {"id": "mood", "name": "기분", "colors": [
+            {"color": "#00b050", "label": "좋음"}, {"color": "#ffc000", "label": "보통"},
+            {"color": "#ff0000", "label": "나쁨"}]},
+        {"id": "workout", "name": "운동", "colors": [{"color": "#0070c0", "label": "운동함"}]},
+    ],
+    "mood_active": "mood",         # 지금 보이는 트래커 id
 }
 
 # 예전 버전 설정 이름 → 새 이름

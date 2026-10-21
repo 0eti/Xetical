@@ -25,19 +25,20 @@ from .gcal import ApiDisabledError, AuthError, GCal, is_holiday_calendar, valida
 from .hotkeys import Hotkeys
 from .jobs import Outbox, is_offline
 from .model import EventStore
+from .mood import MoodData, active_tracker
 from .mousehook import ClickThrough
 from .reminders import Reminders
 from .sync import SyncMixin
 from .tasks import TaskMixin
 from .themes import PRESETS, capture, theme_values
 from .view import CalendarWindow
-from .widgets import app_icon, apply_ui_theme, color_menu
+from .widgets import app_icon, apply_ui_theme, color_menu, swatch_icon
 
 log = logging.getLogger("xetical")
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 RUN_NAME = "Xetical"
 HK_TOGGLE, HK_CONTENT = 1, 2
-PAGE_ACCOUNT, PAGE_ABOUT = 5, 6  # 설정 창 페이지 번호
+PAGE_TRACKER, PAGE_ACCOUNT, PAGE_ABOUT = 5, 6, 7  # 설정 창 페이지 번호
 
 # 이 설정이 바뀌면 표시 범위가 달라지므로 오늘 기준으로 다시 맞춘다
 RESET_VIEW_KEYS = {"display_mode", "weeks", "passed_weeks", "max_columns", "week_start"}
@@ -90,6 +91,7 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
         self.store = EventStore()
         self.store.load_cache()
         self.cell_colors = load_json(CELLS_PATH, {})
+        self.moods = MoodData()
         self._syncing = self._sync_again = False
         self._logging_in = False
         self._fix_url = None  # 상태 줄을 클릭하면 열 해결 페이지
@@ -127,6 +129,9 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
         w.statusClicked.connect(self.status_action)
         w.navigated.connect(self._on_navigated)
         w.adjustFinished.connect(lambda: self.set_adjusting(False))
+        w.moods = self.moods
+        w.moodTrackerChosen.connect(self.choose_tracker)
+        w.moodMenuRequested.connect(self.show_mood_menu)
 
         self.outbox.drained.connect(self._on_outbox_drained)
         self.outbox.blocked.connect(self._on_outbox_blocked)
@@ -229,7 +234,6 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
         add(m, "위치 및 크기", lambda: self.set_adjusting(True))
         m.addSeparator()
         add(m, "내보내기…", self.open_export)
-        add(m, "프린트…", self.print_calendar)
         m.addSeparator()
         add(m, "설정…", self.open_settings)
         add(m, "종료", QApplication.quit)
@@ -483,6 +487,37 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
         elif failed:
             log.warning("단축키 등록 실패: %s", failed)
 
+    # ---------- 트래커 ----------
+    def choose_tracker(self, tracker_id):
+        self.cfg["mood_active"] = tracker_id
+        self.cfg.save()
+        self.win.update()
+
+    def show_mood_menu(self, d, pos):
+        """트래커 칸을 누름: 지금 트래커의 색 중에서 고른다."""
+        tracker = active_tracker(self.cfg)
+        if tracker is None:
+            return
+        current = self.moods.get(tracker["id"], d)
+        m = QMenu()
+        m.addAction(f"{tracker['name']} · {d.month}월 {d.day}일").setEnabled(False)
+        for c in tracker["colors"]:
+            act = self._add(m, c["label"] or c["color"], lambda _=False, col=c["color"]: self.set_mood(d, col),
+                            checked=current.lower() == c["color"].lower())
+            act.setIcon(swatch_icon(c["color"]))
+        m.addSeparator()
+        self._add(m, "지우기", lambda: self.set_mood(d, ""), enabled=bool(current))
+        self._add(m, "트래커 설정…", lambda: self.open_settings(PAGE_TRACKER))
+        m.exec(pos)
+
+    def set_mood(self, d, color, tracker_id=None, record=True):
+        tracker_id = tracker_id or active_tracker(self.cfg)["id"]
+        old = self.moods.get(tracker_id, d)
+        self.moods.set(tracker_id, d, color)
+        if record and old != color:
+            self.push_undo("트래커", [], local=lambda: self.set_mood(d, old, tracker_id, record=False))
+        self.win.update()
+
     def set_cell_color(self, d, color, record=True):
         old = self.cell_colors.get(d.isoformat(), "")
         if color:
@@ -528,6 +563,7 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
     def export_settings(self, path):
         data = {k: v for k, v in self.cfg.items() if k not in LOCAL_ONLY_KEYS}
         data["cell_colors"] = self.cell_colors
+        data["moods"] = self.moods.days
         data["_xetical"] = config.APP_VERSION
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -538,10 +574,14 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
         if not isinstance(data, dict):
             raise ValueError("Xetical 설정 파일이 아닙니다.")
         colors = data.pop("cell_colors", None)
+        moods = data.pop("moods", None)
         values = {k: v for k, v in data.items() if k in DEFAULTS and k not in LOCAL_ONLY_KEYS}
         self.import_settings(values)
         if isinstance(colors, dict):
             self.import_cell_colors(colors)
+        if isinstance(moods, dict):
+            self.moods.merge(moods)
+            self.win.update()
         return len(values)
 
     def default_calendar(self):
@@ -675,10 +715,6 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
             return
         from .tools import ExportDialog
         self._keep(ExportDialog(self))
-
-    def print_calendar(self):
-        from .tools import print_calendar
-        print_calendar(self.win)
 
     def open_settings(self, page=0):
         from .settings import SettingsWindow

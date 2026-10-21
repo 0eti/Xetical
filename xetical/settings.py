@@ -1,11 +1,14 @@
 """설정 창. DesktopCal 설정(캘린더 / 셀 / 글꼴 및 색상 / 고급)의 구성·순서·항목 이름을 따른다.
 바꾸는 즉시 적용되고 저장된다(DesktopCal과 같다)."""
+import copy
 import os
+import uuid
 
 from PySide6.QtCore import Qt, QTime, QTimer
 from PySide6.QtGui import QFont, QKeySequence
 from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFontDialog, QFrame, QHBoxLayout,
-                               QInputDialog, QKeySequenceEdit, QLabel, QListWidget, QListWidgetItem, QMessageBox,
+                               QInputDialog, QKeySequenceEdit, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+                               QMessageBox,
                                QPushButton, QRadioButton, QScrollArea, QStackedWidget, QTimeEdit, QVBoxLayout,
                                QWidget)
 
@@ -83,6 +86,149 @@ class Page(QWidget):
         self.lay.addStretch()
 
 
+class TrackerEditor(QWidget):
+    """트래커 목록(왼쪽)과 고른 트래커의 색·색 이름(오른쪽). 바꾸면 바로 저장된다."""
+    MAX_COLORS = 10
+
+    def __init__(self, win):
+        super().__init__()
+        self.win, self.cfg = win, win.cfg
+        self.list = QListWidget()
+        self.list.setFixedWidth(170)
+        self.list.currentRowChanged.connect(lambda _: self._show_colors())
+        add, rename, remove = QPushButton("추가"), QPushButton("이름 바꾸기"), QPushButton("삭제")
+        add.clicked.connect(self._add)
+        rename.clicked.connect(self._rename)
+        remove.clicked.connect(self._remove)
+        self.remove_btn = remove
+        left = QVBoxLayout()
+        left.addWidget(self.list)
+        btns = QHBoxLayout()
+        for b in (add, rename, remove):
+            btns.addWidget(b)
+        left.addLayout(btns)
+        self.colors = QVBoxLayout()
+        self.add_color = QPushButton("색 추가")
+        self.add_color.clicked.connect(self._add_color)
+        right = QVBoxLayout()
+        hint = QLabel("칸을 누르면 아래 색 중에서 고릅니다. 이름은 달력에 범례로 보입니다.")
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        right.addWidget(hint)
+        right.addLayout(self.colors)
+        right.addWidget(self.add_color, 0, Qt.AlignLeft)
+        right.addStretch()
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addLayout(left)
+        lay.addLayout(right, 1)
+        self._fill()
+
+    def trackers(self):
+        return copy.deepcopy(self.cfg["mood_trackers"])
+
+    def _save(self, trackers, select=None):
+        self.win.set("mood_trackers", trackers)
+        if not any(t["id"] == self.cfg["mood_active"] for t in trackers) and trackers:
+            self.win.set("mood_active", trackers[0]["id"])
+        self._fill(select)
+
+    def _fill(self, select=None):
+        row = self.list.currentRow() if select is None else select
+        self.list.blockSignals(True)
+        self.list.clear()
+        for t in self.cfg["mood_trackers"]:
+            self.list.addItem(t["name"])
+        self.list.blockSignals(False)
+        self.list.setCurrentRow(min(max(row, 0), self.list.count() - 1))
+        self.remove_btn.setEnabled(self.list.count() > 1)
+        self._show_colors()
+
+    def _show_colors(self):
+        while self.colors.count():  # 색 줄(한 줄 = 위젯 하나)을 지우고 새로 만든다
+            w = self.colors.takeAt(0).widget()
+            if w:
+                w.deleteLater()
+        i = self.list.currentRow()
+        trackers = self.cfg["mood_trackers"]
+        if not 0 <= i < len(trackers):
+            return
+        for k, c in enumerate(trackers[i]["colors"]):
+            row = QHBoxLayout()
+            btn = ColorButton(c["color"])
+            btn.colorChanged.connect(lambda col, k=k: self._edit_color(k, color=col))
+            name = QLineEdit(c["label"])
+            name.setPlaceholderText("색 이름 (예: 좋음, 운동함)")
+            name.editingFinished.connect(lambda k=k, name=name: self._edit_color(k, label=name.text().strip()))
+            rm = QPushButton("✕")
+            rm.setFixedWidth(28)
+            rm.setEnabled(len(trackers[i]["colors"]) > 1)
+            rm.clicked.connect(lambda _=False, k=k: self._remove_color(k))
+            row.addWidget(btn)
+            row.addWidget(name, 1)
+            row.addWidget(rm)
+            holder = QWidget()
+            holder.setLayout(row)
+            self.colors.addWidget(holder)
+        self.add_color.setEnabled(len(trackers[i]["colors"]) < self.MAX_COLORS)
+
+    def _add(self):
+        name, ok = QInputDialog.getText(self, "트래커 추가", "트래커 이름 (예: 물 마시기)")
+        if ok and name.strip():
+            trackers = self.trackers()
+            trackers.append({"id": f"t{uuid.uuid4().hex[:8]}", "name": name.strip(),
+                             "colors": [{"color": "#00b050", "label": "했음"}]})
+            self._save(trackers, len(trackers) - 1)
+
+    def _rename(self):
+        i = self.list.currentRow()
+        trackers = self.trackers()
+        if not 0 <= i < len(trackers):
+            return
+        name, ok = QInputDialog.getText(self, "이름 바꾸기", "트래커 이름", text=trackers[i]["name"])
+        if ok and name.strip():
+            trackers[i]["name"] = name.strip()
+            self._save(trackers, i)
+
+    def _remove(self):
+        i = self.list.currentRow()
+        trackers = self.trackers()
+        if len(trackers) <= 1 or not 0 <= i < len(trackers):
+            return
+        t = trackers[i]
+        if QMessageBox.question(self, "트래커 삭제", f"'{t['name']}' 트래커와 칠한 기록을 모두 지울까요?") \
+                != QMessageBox.Yes:
+            return
+        del trackers[i]
+        self.win.app.moods.drop(t["id"])
+        self._save(trackers, max(0, i - 1))
+
+    def _add_color(self):
+        i = self.list.currentRow()
+        trackers = self.trackers()
+        trackers[i]["colors"].append({"color": "#0070c0", "label": ""})
+        self._save(trackers, i)
+
+    def _edit_color(self, k, color=None, label=None):
+        i = self.list.currentRow()
+        trackers = self.trackers()
+        c = trackers[i]["colors"][k]
+        if color is not None:
+            c["color"] = color or c["color"]
+        if label is not None:
+            if label == c["label"]:
+                return
+            c["label"] = label
+        self._save(trackers, i)
+
+    def _remove_color(self, k):
+        i = self.list.currentRow()
+        trackers = self.trackers()
+        if len(trackers[i]["colors"]) > 1:
+            del trackers[i]["colors"][k]
+            self._save(trackers, i)
+
+
 class SettingsWindow(QWidget):
     def __init__(self, app):
         super().__init__(None, Qt.Window | Qt.WindowStaysOnTopHint)
@@ -100,7 +246,8 @@ class SettingsWindow(QWidget):
         self.stack = QStackedWidget()
         for title, build in (("캘린더", self._page_calendar), ("셀", self._page_cell),
                              ("글꼴 및 색상", self._page_font_color), ("고급", self._page_advanced),
-                             ("할 일 · 알림", self._page_tasks), ("계정", self._page_account),
+                             ("할 일 · 알림", self._page_tasks), ("트래커", self._page_mood),
+                             ("계정", self._page_account),
                              ("정보", self._page_about)):
             self.nav.addItem(QListWidgetItem(title))
             page = build()
@@ -433,6 +580,18 @@ class SettingsWindow(QWidget):
         preview = QPushButton("지금 보기")
         preview.clicked.connect(lambda: self.app.reminders.check_summary(force=True))
         p.row("미리 보기", preview)
+        return p
+
+    # ---------- 트래커(Xetical) ----------
+    def _page_mood(self):
+        p = Page()
+        p.section("트래커")
+        p.row("달력 아래 트래커 표시", self.onoff("mood_on"),
+              hint="올해 365일을 칸으로 보여 줍니다. 오늘과 지난 날 칸을 눌러 색을 칠합니다(기분, 운동 여부 등). "
+                   "구글과 동기화하지 않고 이 PC에만 저장합니다.")
+        p.row("모양", self.combo("mood_layout", [("week", "주 단위 (7줄 × 53주)"), ("month", "월 단위 (12줄 × 31일)")]))
+        p.section("트래커와 색")
+        p.widget_row(TrackerEditor(self))
         return p
 
     # ---------- 계정(Xetical) ----------

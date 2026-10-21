@@ -7,3 +7,4 @@ client_secret*.json
 .claude/
 /build/
 /dist/
+/Xetical-*.json

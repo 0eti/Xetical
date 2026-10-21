@@ -1,11 +1,10 @@
-"""☰ 메뉴의 도구들: 내용 검색, 내보내기, 인쇄."""
+"""☰ 메뉴의 도구들: 내용 검색, 내보내기."""
 import csv
 import os
 from datetime import date, timedelta
 
-from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QColor, QPainter, QPageLayout
-from PySide6.QtPrintSupport import QPrinter, QPrintPreviewDialog
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFileDialog,
                                QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
                                QTreeWidget, QTreeWidgetItem, QVBoxLayout)
@@ -195,27 +194,4 @@ class ExportDialog(QDialog):
                 f.write("\n".join(lines).lstrip())
         self.accept()
         QMessageBox.information(None, "Xetical", f"{len(events)}개 일정을 내보냈습니다.\n{path}")
-
-
-# ---------------------------------------------------------------- 인쇄
-def print_calendar(win):
-    printer = QPrinter(QPrinter.HighResolution)
-    printer.setPageOrientation(QPageLayout.Landscape)
-    dlg = QPrintPreviewDialog(printer)
-    dlg.setWindowTitle("인쇄")
-    dlg.setWindowFlag(Qt.WindowStaysOnTopHint)
-
-    def paint(pr):
-        pix = win.grab()
-        p = QPainter(pr)
-        page = QRectF(pr.pageLayout().paintRectPixels(pr.resolution()))
-        page.moveTo(0, 0)
-        scale = min(page.width() / pix.width(), page.height() / pix.height())
-        w, h = pix.width() * scale, pix.height() * scale
-        target = QRectF((page.width() - w) / 2, (page.height() - h) / 2, w, h)
-        p.fillRect(target, QColor("#000000"))
-        p.drawPixmap(target, pix, QRectF(pix.rect()))
-        p.end()
-    dlg.paintRequested.connect(paint)
-    dlg.exec()
 

@@ -264,7 +264,7 @@ for k in ("time_format", "month_label", "weekday_style", "single_line", "max_ite
 # ---------- 9. 설정 창 ----------
 from xetical.settings import SettingsWindow
 s = SettingsWindow(a)
-check("설정 창: 7개 탭", s.nav.count() == 7 and [s.nav.item(i).text() for i in range(7)][4] == "할 일 · 알림")
+check("설정 창: 8개 탭", s.nav.count() == 8 and [s.nav.item(i).text() for i in range(8)][4:6] == ["할 일 · 알림", "트래커"])
 for i in range(7):
     s.nav.setCurrentRow(i)
     s.grab().save(str(SP / f"set{i}.png"))

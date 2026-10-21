@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QToolTip, QWidget
 from . import desktop
 from .almanac import lunar, solar_term, week_number
 from .model import COUNTDOWN_TYPES
+from .mood import MoodPanel, active_tracker, color_label
 
 WEEKDAY_NAMES = ["월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일"]
 WEEKDAY_EN = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -95,6 +96,8 @@ class CalendarWindow(QWidget):
     statusClicked = Signal()
     navigated = Signal()
     adjustFinished = Signal()
+    moodTrackerChosen = Signal(str)            # 트래커 이름을 누름(트래커 id)
+    moodMenuRequested = Signal(object, QPoint) # 트래커 칸을 누름(date, 화면 좌표)
 
     def __init__(self, cfg, store, cell_colors):
         super().__init__(None, Qt.FramelessWindowHint | Qt.Tool)
@@ -104,6 +107,8 @@ class CalendarWindow(QWidget):
         self.setWindowTitle("Xetical")
         self.cfg, self.store, self.cell_colors = cfg, store, cell_colors
         self.countdowns = []     # 카운트다운 일정(아래쪽 바)
+        self.moods = None        # 트래커 칠한 날(MoodData, app이 넣어 준다)
+        self.mood = MoodPanel()
         self.anchor = self.today_anchor()
         self.status, self.status_clickable = "", False
         self.sync_info = None  # ☁ 풍선 도움말에 덧붙일 동기화 정보(app이 넣어 준다)
@@ -299,10 +304,12 @@ class CalendarWindow(QWidget):
         header_h = round(40 * s) if show_title else 0
         dow_h = round(22 * s)
         cd_h = round(QFontMetrics(make_font(self.cfg["item_font"], 0.85)).height() + 8 * s) if self._bar_items() else 0
+        mood_h = self.mood.height(self.cfg, W, s, self._mood_font(), date.today().year) if self.cfg["mood_on"] else 0
         wn_w = round(26 * s) if self.cfg["week_number"] and self.mode != "rolling_row" else 0
         first, rows, cols = self.grid_shape()
-        grid = QRectF(m + wn_w, m + header_h + dow_h, W - wn_w, H - header_h - dow_h - cd_h)
+        grid = QRectF(m + wn_w, m + header_h + dow_h, W - wn_w, H - header_h - dow_h - cd_h - mood_h)
         return {"s": s, "m": m, "W": W, "H": H, "header_h": header_h, "dow_h": dow_h, "cd_h": cd_h, "wn_w": wn_w,
+                "mood_h": mood_h,
                 "first": first, "rows": rows, "cols": cols, "grid": grid,
                 "cw": grid.width() / cols, "ch": grid.height() / rows}
 
@@ -453,6 +460,12 @@ class CalendarWindow(QWidget):
             self._paint_bars(p, L, bars, bar_h, date_font)
         if self.cfg["month_interval"] and self.mode != "month":
             self._paint_month_lines(p, L)
+        if L["mood_h"]:
+            r = QRectF(m, m + L["H"] - L["cd_h"] - L["mood_h"], L["W"], L["mood_h"])
+            self.mood.paint(p, r, self.cfg, self.moods, date.today(), self._mood_font(),
+                            self._vgrad(r, self.cfg["cell_bg"], 0.5, 0.38), s)
+        else:
+            self.mood.tabs, self.mood.boxes = [], []
         if L["cd_h"]:
             self._paint_countdown_bar(p, L)
         self._paint_drag(p, L)
@@ -734,6 +747,16 @@ class CalendarWindow(QWidget):
             if i + L["cols"] < n and below.month != d.month:
                 p.drawLine(QPointF(r.left(), r.bottom()), QPointF(r.right(), r.bottom()))
 
+    def _mood_font(self):
+        return make_font(self.cfg["item_font"], 0.8, bold=False)
+
+    def mood_tip(self, d):
+        tracker = active_tracker(self.cfg)
+        color = self.moods.get(tracker["id"], d) if tracker and self.moods else ""
+        label = color_label(tracker, color) if color else ""
+        text = f"{d.month}월 {d.day}일 ({weekday_name(d.weekday(), self.cfg, 'short')})"
+        return f"{text} · {label or '색 칠함'}" if color else f"{text} — 눌러서 색 칠하기"
+
     def _bar_items(self):
         out = []
         for ev in self.countdowns:
@@ -934,11 +957,15 @@ class CalendarWindow(QWidget):
             self._hover_btn, self._hover_day = btn, day
             self.update()
         ev = None if self.adjusting else self._event_at(pos)
-        tip = ev or (("btn", btn) if btn else None)
+        mood = None if self.adjusting or ev or btn else self.mood.hit(pos)
+        mood_day = mood[1] if mood and mood[0] == "box" else None
+        tip = ev or (("btn", btn) if btn else None) or (("mood", mood_day) if mood_day else None)
         if tip != self._tip:
             self._tip = tip
             if ev:
                 QToolTip.showText(gpos, tooltip_text(ev, self.store, self.cfg), self)
+            elif mood_day:
+                QToolTip.showText(gpos, self.mood_tip(mood_day), self)
             elif btn:
                 QToolTip.showText(gpos, self.button_tip(btn), self)
             else:
@@ -947,6 +974,13 @@ class CalendarWindow(QWidget):
     def on_press(self, pos, gpos, button):
         if not self.adjusting:
             self.activate_keys()
+        mood = None if self.adjusting else self.mood.hit(pos)
+        if mood:  # 트래커: 이름을 누르면 바꾸고, 칸을 누르면(왼쪽·오른쪽 모두) 색 고르기
+            if mood[0] == "tab" and button == Qt.LeftButton:
+                self.moodTrackerChosen.emit(mood[1])
+            elif mood[0] == "box":
+                self.moodMenuRequested.emit(mood[1], gpos)
+            return
         if button == Qt.RightButton and not self.adjusting:
             ev, d = self._event_at(pos), self._day_at(pos)
             if ev:
