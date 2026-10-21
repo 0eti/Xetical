@@ -137,7 +137,7 @@ check("색 칠하기: 저장됨", a.moods.get("mood", T) == "#00b050")
 check("마우스를 올리면 날짜와 색 이름", w.mood_tip(T).endswith("· 좋음"), w.mood_tip(T))
 a.undo()
 check("되돌리기: 칠하기 취소", a.moods.get("mood", T) == "")
-check("빈 칸 풍선 도움말은 더블클릭 안내", w.mood_tip(T).endswith("더블클릭해서 색 칠하기"), w.mood_tip(T))
+check("빈 칸에는 풍선 도움말 없음", w.mood_tip(T) == "", w.mood_tip(T))
 
 # 색 이름이 빈칸이면 색 코드를 보이지 않음
 a.cfg["mood_trackers"][0]["colors"].append({"color": "#7030a0", "label": ""})

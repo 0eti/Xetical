@@ -756,7 +756,7 @@ class CalendarWindow(QWidget):
         label = color_label(tracker, color) if color else ""
         text = f"{d.month}월 {d.day}일 ({weekday_name(d.weekday(), self.cfg, 'short')})"
         if not color:
-            return f"{text} — 더블클릭해서 색 칠하기"
+            return ""  # 빈 칸에는 풍선 도움말을 띄우지 않는다(사용자 요청)
         return f"{text} · {label}" if label else text
 
     def _bar_items(self):
