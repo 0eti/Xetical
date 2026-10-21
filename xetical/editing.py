@@ -5,7 +5,7 @@ from datetime import timedelta
 
 from PySide6.QtGui import QGuiApplication
 
-from .dialogs import EventDialog, ask_scope, bring_to_front
+from .dialogs import EventDialog, ask_scope, bring_to_front, rule_dates
 from .editor import CellEditor
 from .gcal import event_props
 from .jobs import new_tmp
@@ -74,7 +74,7 @@ class EditMixin:
         ed = CellEditor(self.cfg, self.store, day, rect, self.default_calendar(), self.cfg["recent_colors"])
         ed.committed.connect(self.apply_cell)
         ed.openEvent.connect(self.edit_event)
-        ed.newStructured.connect(lambda d, kind: self.new_event(d, kind))
+        ed.newStructured.connect(lambda d, kind, title: self.new_event(d, kind, title=title))
         ed.cellColorPicked.connect(self.set_cell_color)
         ed.destroyed.connect(lambda *_: setattr(self, "_editor", None))
         self._editor = ed
@@ -124,21 +124,38 @@ class EditMixin:
         if inverse:
             self.push_undo("칸 편집", [("apply_ops", [inverse], inv_tmps)])
 
-    def new_event(self, day, focus=None, start_time=None):
+    def new_event(self, day, focus=None, start_time=None, title=""):
         if self._need_login():
             return
         dlg = EventDialog(self.store.calendars, day=day, default_cal=self.default_calendar(), focus=focus,
                           cfg=self.cfg, start_time=start_time)
+        if title:
+            dlg.title.setText(title)
 
         def done():
             v = dlg.values()
             tmp = new_tmp()
             ev = self._event_from_values(tmp, v)
             self._add_temp(ev)
+            self._add_temp_repeats(ev, v.get("recurrence"))
             self.outbox.add("create_event", v, tmps=[tmp], label="새 일정")
             self.push_undo("새 일정", [("delete_event", [ev, "one"], [])])
         dlg.accepted.connect(done)
         self._keep(dlg)
+
+    def _add_temp_repeats(self, ev, rule):
+        """새 반복 일정의 다음 회차들도 바로 보여 준다. 진짜 회차는 다음 동기화 때 구글에서 받아 바뀐다
+        (동기화가 늦거나 실패해도 첫날만 덩그러니 보이지 않게)."""
+        if not rule:
+            return
+        first = ev.first_day
+        until = self.store.range[1] if self.store.range else first + timedelta(days=366)
+        for d in rule_dates(rule, first, until)[1:]:
+            shift = d - first
+            self.store.events.append(copy.replace(ev, id=f"{ev.id}_{d:%Y%m%d}", start=ev.start + shift,
+                                                  end=ev.end + shift))
+        self.store.reindex()
+        self.win.update()
 
     def edit_event(self, ev):
         if ev.id.startswith("tmp-"):

@@ -513,5 +513,41 @@ old_f = {"op": "update_event", "args": J.encode([inst, dict(vals(), recurrence="
 J.upgrade_job(old_f)
 check("F4 예전 '이후' 작업에 id를 붙임", len(old_f["args"][1].get("event_id", "")) == 32 and old_f["args"][1]["recurrence"] is None)
 
+# ================================================================ 매월 반복이 첫날만 보이던 문제(2026-10-21)
+from xetical.dialogs import rule_dates
+check("M 규칙 날짜: 매월 26일", rule_dates("RRULE:FREQ=MONTHLY;BYMONTHDAY=26", date(2026, 11, 26), date(2027, 3, 1))
+      == [date(2026, 11, 26), date(2026, 12, 26), date(2027, 1, 26), date(2027, 2, 26)])
+check("M 규칙 날짜: 매월 말일·31일 없는 달", rule_dates("RRULE:FREQ=MONTHLY;BYMONTHDAY=-1", date(2027, 1, 31), date(2027, 4, 1))
+      == [date(2027, 1, 31), date(2027, 2, 28), date(2027, 3, 31)])
+check("M 규칙 날짜: 격주 월·수, 횟수 4", rule_dates("RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE;COUNT=4",
+                                               date(2026, 11, 2), date(2027, 6, 1))
+      == [date(2026, 11, 2), date(2026, 11, 4), date(2026, 11, 16), date(2026, 11, 18)])
+check("M 규칙 날짜: 마지막 금요일, 종료일", rule_dates("RRULE:FREQ=MONTHLY;BYDAY=-1FR;UNTIL=20270131", date(2026, 11, 27),
+                                             date(2027, 6, 1)) == [date(2026, 11, 27), date(2026, 12, 25), date(2027, 1, 29)])
+check("M 규칙 날짜: 매년", rule_dates("RRULE:FREQ=YEARLY", date(2026, 12, 3), date(2029, 1, 1))
+      == [date(2026, 12, 3), date(2027, 12, 3), date(2028, 12, 3)])
+
+D3 = T + timedelta(days=5)
+a.new_event(D3, "repeat")
+dlg = a._dialogs[-1]
+dlg.title.setText("월세 납부일")
+dlg.repeat.kind.setCurrentIndex(dlg.repeat.kind.findData("monthly"))
+dlg._save()
+nxt = [D3 + timedelta(days=k) for k in range(25, 35) if (D3 + timedelta(days=k)).day == D3.day]
+shown = [e.title for e in a.win.cell_events(nxt[0])] if nxt else []
+check("M 새 매월 반복: 저장하자마자 다음 달 칸에도 보임(동기화 전)", "월세 납부일" in shown, (nxt, shown))
+pump(lambda: len(a.outbox) == 0)
+
+# ↻ 반복 작업 추가: 커서 줄 글자가 제목으로, 새 줄은 칸에서 빠짐
+ed5 = CellEditor(a.cfg, a.store, T + timedelta(days=9), QRect(0, 0, 160, 120), "me", [])
+ed5.edit.setPlainText("월세 납부일")
+got5 = []
+ed5.newStructured.connect(lambda d, kind, title: got5.append((kind, title)))
+committed5 = []
+ed5.committed.connect(lambda day, ops, lines, series: committed5.append(ops))
+ed5._structured("repeat")
+check("M ↻: 커서 줄 글자를 새 일정 창 제목으로 넘김", got5 == [("repeat", "월세 납부일")], got5)
+check("M ↻: 저장 안 한 새 줄은 한 줄 일정으로 만들지 않음", not any(op[0] == "create" for ops in committed5 for op in ops), committed5)
+
 print(f"\n{sum(ok for _, ok in results)}/{len(results)} 통과")
 a.shutdown() if hasattr(a, "shutdown") else None

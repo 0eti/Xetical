@@ -36,7 +36,7 @@ class LineEdit(QTextEdit):
 class CellEditor(QWidget):
     committed = Signal(object, list, list, list)  # date, ops, 화면에 바로 반영할 줄 목록, 반복 일정 전체·이후 작업
     openEvent = Signal(object)                 # 위쪽 목록의 일정 편집
-    newStructured = Signal(object, str)        # date, 'repeat' | 'alarm' | 'countdown'
+    newStructured = Signal(object, str, str)   # date, 'repeat' | 'alarm' | 'countdown', 제목(커서 줄 글자)
     cellColorPicked = Signal(object, str)      # date, 색('' = 없음)
 
     def __init__(self, cfg, store, day, cell_rect, default_cal, recent_colors):
@@ -371,8 +371,19 @@ class CellEditor(QWidget):
         self.openEvent.emit(ev)
 
     def _structured(self, kind):
+        """반복·알림·카운트다운 추가: 커서 줄의 글자를 새 일정 창의 제목으로 넘긴다. 아직 저장하지 않은 새 줄이면
+        그 줄은 칸에서 뺀다(같은 날에 한 줄 일정과 반복 일정이 둘 다 생기지 않게)."""
+        title = ""
+        blocks = self._current_lines()
+        if blocks:
+            b = blocks[0]
+            title = b.text().strip()
+            if title and self._lines[b.userState()].ev is None:
+                cur = QTextCursor(b)
+                cur.movePosition(QTextCursor.EndOfBlock, QTextCursor.KeepAnchor)
+                cur.removeSelectedText()
         self.save_and_close()
-        self.newStructured.emit(self.day, kind)
+        self.newStructured.emit(self.day, kind, title)
 
     def changeEvent(self, e):
         super().changeEvent(e)

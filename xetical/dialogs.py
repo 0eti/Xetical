@@ -73,6 +73,49 @@ def parse_rrule(rule):
     return out
 
 
+def rule_dates(rule, start, until):
+    """RRULE의 회차 날짜(start 포함, until 전까지). 저장하자마자 다음 회차들을 화면에 보여 주는 데 쓴다
+    (진짜 회차는 동기화 때 구글에서 받는다). 이 창이 만드는 규칙 모양만 다룬다: DAILY·WEEKLY(BYDAY)·
+    MONTHLY(BYMONTHDAY, -1, N번째 요일)·YEARLY, INTERVAL·COUNT·UNTIL."""
+    p = parse_rrule(rule)
+    freq, n = p.get("FREQ"), int(p.get("INTERVAL", 1) or 1)
+    if freq not in ("DAILY", "WEEKLY", "MONTHLY", "YEARLY"):
+        return [start]
+    if "UNTIL" in p:
+        u = p["UNTIL"].upper()
+        last = (datetime.strptime(u[:15], "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc).astimezone().date()
+                if u.endswith("Z") else date(int(u[:4]), int(u[4:6]), int(u[6:8])))
+        until = min(until, last + timedelta(days=1))
+    count = int(p["COUNT"]) if p.get("COUNT", "").isdigit() else None
+    days = [WD_CODES.index(x[-2:]) for x in p.get("BYDAY", "").split(",") if x[-2:] in WD_CODES]
+    nth = [int(x[:-2]) for x in p.get("BYDAY", "").split(",") if x[:-2].lstrip("-").isdigit()]
+    mdays = [int(x) for x in p.get("BYMONTHDAY", "").split(",") if x.lstrip("-").isdigit()]
+
+    def hit(d):
+        months = (d.year - start.year) * 12 + d.month - start.month
+        last_day = pycal.monthrange(d.year, d.month)[1]
+        if freq == "DAILY":
+            return (d - start).days % n == 0
+        if freq == "WEEKLY":
+            weeks = ((d - timedelta(days=d.weekday())) - (start - timedelta(days=start.weekday()))).days // 7
+            return weeks % n == 0 and d.weekday() in (days or [start.weekday()])
+        if freq == "MONTHLY":
+            if months % n:
+                return False
+            if nth:  # 예: 2MO(둘째 월요일), -1FR(마지막 금요일)
+                k = (d.day - 1) // 7 + 1 if nth[0] > 0 else -((last_day - d.day) // 7 + 1)
+                return d.weekday() in days and k == nth[0]
+            return any(d.day == (m if m > 0 else last_day + m + 1) for m in (mdays or [start.day]))
+        return (d.year - start.year) % n == 0 and (d.month, d.day) == (start.month, start.day)
+
+    out, d = [], start
+    while d < until and (count is None or len(out) < count):
+        if d == start or hit(d):
+            out.append(d)
+        d += timedelta(days=1)
+    return out
+
+
 class RepeatEditor(QGroupBox):
     def __init__(self):
         super().__init__("반복")
