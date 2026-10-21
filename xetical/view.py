@@ -755,7 +755,9 @@ class CalendarWindow(QWidget):
         color = self.moods.get(tracker["id"], d) if tracker and self.moods else ""
         label = color_label(tracker, color) if color else ""
         text = f"{d.month}월 {d.day}일 ({weekday_name(d.weekday(), self.cfg, 'short')})"
-        return f"{text} · {label or '색 칠함'}" if color else f"{text} — 눌러서 색 칠하기"
+        if not color:
+            return f"{text} — 더블클릭해서 색 칠하기"
+        return f"{text} · {label}" if label else text
 
     def _bar_items(self):
         out = []

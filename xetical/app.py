@@ -502,7 +502,7 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
         m = QMenu()
         m.addAction(f"{tracker['name']} · {d.month}월 {d.day}일").setEnabled(False)
         for c in tracker["colors"]:
-            act = self._add(m, c["label"] or c["color"], lambda _=False, col=c["color"]: self.set_mood(d, col),
+            act = self._add(m, c["label"], lambda _=False, col=c["color"]: self.set_mood(d, col),  # 이름이 없으면 색 견본만
                             checked=current.lower() == c["color"].lower())
             act.setIcon(swatch_icon(c["color"]))
         m.addSeparator()

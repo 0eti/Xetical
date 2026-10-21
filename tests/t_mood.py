@@ -137,6 +137,25 @@ check("색 칠하기: 저장됨", a.moods.get("mood", T) == "#00b050")
 check("마우스를 올리면 날짜와 색 이름", w.mood_tip(T).endswith("· 좋음"), w.mood_tip(T))
 a.undo()
 check("되돌리기: 칠하기 취소", a.moods.get("mood", T) == "")
+check("빈 칸 풍선 도움말은 더블클릭 안내", w.mood_tip(T).endswith("더블클릭해서 색 칠하기"), w.mood_tip(T))
+
+# 색 이름이 빈칸이면 색 코드를 보이지 않음
+a.cfg["mood_trackers"][0]["colors"].append({"color": "#7030a0", "label": ""})
+shown.clear()
+
+
+class _Menu2(QMenu):
+    def exec(self, *a_):
+        shown.append([act.text() for act in self.actions()])
+
+
+A.QMenu = _Menu2
+a.show_mood_menu(T, QPoint(0, 0))
+check("색 이름이 빈칸이면 메뉴에 색 코드가 나오지 않음", shown and "#7030a0" not in shown[0] and "" in shown[0], shown)
+a.set_mood(T, "#7030a0")
+check("색 이름이 빈칸이면 풍선 도움말에 날짜만", "#" not in w.mood_tip(T) and "·" not in w.mood_tip(T), w.mood_tip(T))
+a.undo()
+a.cfg["mood_trackers"][0]["colors"].pop()
 A.QMenu = QMenu
 
 # 지난 날
