@@ -4,12 +4,14 @@ import copy
 import logging
 from datetime import date, datetime, timedelta
 
+from googleapiclient.errors import HttpError
 from PySide6.QtWidgets import QMessageBox
 
 from .gcal import ApiDisabledError, AuthError
 
 log = logging.getLogger("xetical")
 FETCH_MARGIN = timedelta(days=42)
+STORAGE_URL = "https://one.google.com/storage"  # 구글 계정 저장 공간 관리
 
 
 def months(n):
@@ -123,6 +125,10 @@ class SyncMixin:
                 self.set_status(f"{err.api}가 꺼져 있음 — 여기를 클릭해 '사용' 누르기", True)
             elif isinstance(err, AuthError):
                 self.set_status(f"{err} — 여기를 클릭", True)
+            elif isinstance(err, HttpError) and b"storageQuotaExceeded" in (err.content or b""):
+                # 구글 저장 공간(지메일·드라이브·포토 합계)이 가득 차면 작은 파일도 못 만든다. 기록은 이 PC에 그대로 있다.
+                self._fix_url = STORAGE_URL
+                self.set_status("구글 저장 공간이 가득 차서 트래커를 동기화하지 못함 — 여기를 클릭", True)
             else:  # 인터넷 끊김 등: 다음 동기화 때 합쳐서 다시 올린다(잃는 것 없음)
                 log.warning("트래커 동기화 실패: %s", err)
         else:

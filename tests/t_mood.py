@@ -327,5 +327,28 @@ check("앱: 다른 PC에서 바꾼 트래커 목록을 받아 옴", [t["id"] for
 check("앱: 다른 PC에서 칠한 날을 받아 옴", a.moods.get("sleep", T) == "#7030a0")
 check("앱: 목록에서 빠진 트래커(운동)의 기록은 지움", "workout" not in a.moods.days)
 
+# 구글 저장 공간이 가득 참
+from googleapiclient.errors import HttpError
+
+
+class _Resp(dict):
+    status, reason = 403, "Forbidden"
+
+
+def _full(loc):
+    raise HttpError(_Resp(status="403"), b'{"error": {"errors": [{"reason": "storageQuotaExceeded"}]}}')
+
+
+sg.mood_sync = _full
+a.set_status("")
+a.sync_moods()
+end = _time.time() + 5
+while a._mood_syncing and _time.time() < end:
+    qapp.processEvents()
+    _time.sleep(0.02)
+check("구글 저장 공간이 가득 차면 위쪽에 안내 + 누르면 저장 공간 화면",
+      "저장 공간이 가득" in w.status and w.status_clickable and a._fix_url == "https://one.google.com/storage", w.status)
+check("저장 공간이 가득 차도 이 PC 기록은 그대로", a.moods.get("sleep", T) == "#7030a0")
+
 a.shutdown()
 print(f"\n{sum(ok for _, ok in results)}/{len(results)} 통과")

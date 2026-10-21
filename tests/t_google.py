@@ -180,6 +180,9 @@ try:
               loc2 = {"trackers": loc["trackers"], "trackers_t": 1.0, "days": {"t": {"2027-01-12": ["#ff0000", 2.0]}}}
               merged = g.mood_sync(loc2)
               check("트래커: 다른 PC 내용과 합쳐짐", set(merged["days"]["t"]) == {"2027-01-11", "2027-01-12"}, merged)
+          except HttpError as ex:  # 드라이브 문제(저장 공간 가득 등)로 나머지 시험까지 멈추지 않게
+              reason = "구글 저장 공간이 가득 참" if b"storageQuotaExceeded" in (ex.content or b"") else repr(ex)[:120]
+              check("트래커: 드라이브 앱 전용 폴더에 올리고 받기", False, reason)
           finally:
               fid, _got = g.mood_download()
               if fid:
