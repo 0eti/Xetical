@@ -199,7 +199,6 @@ class DayView(QWidget):
             b.setStyleSheet(style)
             b.setCursor(Qt.PointingHandCursor)
             if ev.task_list:  # 할 일은 누르면 바로 완료/미완료(예정은 그 회차 완료)
-                b.setToolTip("누르면 완료/미완료 · 우클릭하면 편집")
                 b.clicked.connect(lambda _=False, ev=ev: self.app.toggle_task(ev))
                 b.setContextMenuPolicy(Qt.CustomContextMenu)
                 b.customContextMenuRequested.connect(lambda _p, ev=ev: self.app.edit_event(ev))

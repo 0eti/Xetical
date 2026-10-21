@@ -23,7 +23,6 @@ class CountdownCard(QWidget):
         self._drag = None
         self._allow_z = False
         self.apply_size()
-        self.setToolTip("끌어서 옮기기 · 더블클릭하면 편집")
 
     def scale(self):
         return {"small": 0.8, "large": 1.3}.get(self.cfg.get("card_size"), 1.0)

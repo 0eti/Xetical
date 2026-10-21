@@ -84,7 +84,6 @@ class CellEditor(QWidget):
         for ev in self.other_events:
             b = QPushButton(self._item_label(ev))
             b.setObjectName("item")
-            b.setToolTip("클릭해서 편집")
             b.setCursor(Qt.PointingHandCursor)
             b.setStyleSheet(f"color:{ev.text_color or '#eee'};" + ("text-decoration:line-through;" if ev.done else ""))
             b.clicked.connect(lambda _=False, ev=ev: self._open_event(ev))

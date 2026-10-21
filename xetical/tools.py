@@ -68,7 +68,6 @@ class SearchDialog(QDialog):
                          ("countdown", "카운트다운")):
             self.kind.addItem(label, k)
         self.color = ColorButton("", allow_none=True)
-        self.color.setToolTip("글자색으로 거르기 (없음 = 전체)")
         go = QPushButton("검색")
         go.setDefault(True)
         go.clicked.connect(self.search)

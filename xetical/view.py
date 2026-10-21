@@ -780,10 +780,8 @@ class CalendarWindow(QWidget):
 
     def button_tip(self, key):
         if key == "cloud":
-            text = {"login": "로그인 후, 데이터를 동기화하고 백업할 수 있습니다",
-                    "syncing": "데이터를 동기화중...",
-                    "error": "동기화 실패 — 클릭해서 다시 시도",
-                    }.get(self.cloud_state, "구글 캘린더와 동기화됨 — 클릭해서 지금 동기화")
+            text = {"login": "로그인 필요", "syncing": "동기화 중…", "error": "동기화 실패",
+                    }.get(self.cloud_state, "동기화")
             extra = self.sync_info() if self.sync_info and self.cloud_state != "login" else ""
             return text + (f"\n{extra}" if extra else "")
         return {"plugins": "플러그인 (표시할 캘린더)", "mobile": "캘린더 목록 모바일 버전", "account": "계정 센터",
@@ -1088,9 +1086,9 @@ def tooltip_text(ev, store, cfg=None):
     def t(dt):
         return fmt_time(dt, cfg) if cfg else f"{dt:%H:%M}"
     if ev.virtual:
-        when = f"{ev.start:%m/%d} 예정 · 반복 할 일 (누르면 지금 차례 할 일을 엽니다)"
+        when = f"{ev.start:%m/%d} 예정 · 반복 할 일"
     elif ev.task_list:
-        when = f"{ev.start:%m/%d} 마감 · {'완료한 할 일' if ev.done else '할 일'} — ☐를 누르면 완료"
+        when = f"{ev.start:%m/%d} 마감 · {'완료한 할 일' if ev.done else '할 일'}"
     elif ev.all_day:
         last = ev.end - timedelta(days=1)
         when = f"{ev.start:%m/%d}" + (f" ~ {last:%m/%d}" if last != ev.start else "") + " (하루 종일)"
@@ -1116,8 +1114,6 @@ def tooltip_text(ev, store, cfg=None):
     if ev.description:
         desc = ev.description if len(ev.description) < 300 else ev.description[:300] + "…"
         lines.append("<br>" + _esc(desc).replace("\n", "<br>"))
-    if ev.writable and not ev.virtual:
-        lines.append("<span style='color:gray'>끌어서 다른 날로 옮기기 · 우클릭으로 복사</span>")
     return "<br>".join(lines)
 
 
