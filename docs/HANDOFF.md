@@ -13,6 +13,8 @@
 - **git:** 2026-10-21부터 git으로 관리한다. 공개 GitHub 저장소 https://github.com/0eti/Xetical (`main`).
   - 공개 전에 개인정보를 지우려고 기록을 다시 썼다. 지우기 전 기록은 비공개 저장소 `0eti/Xetical-old`에 남아 있다(사용자가 웹에서 지우면 됨).
   - 이 저장소는 공개다. 커밋하기 전에 개인정보(메일·캘린더 이름·프로젝트 번호 등)가 들어가지 않았는지 확인할 것.
+  - **`git add -A` 금지:** 사용자가 프로젝트 폴더에 파일(설정 백업 등)을 둘 수 있다. 커밋은 파일을 하나씩 지정해서 한다.
+    (2026-10-22 설정 백업 `Xetical-설정.json`이 실수로 올라갔다가 지워졌다. 예전 커밋 id로는 아직 열리지만 할 일 이름 하나뿐이라 사용자가 그대로 두기로 함)
   - 커밋 작성자는 저장소 로컬 설정(0eti, GitHub noreply 메일). `data/`, `.venv/`, `client_secret*.json`은 `.gitignore`로 뺐다.
   - 파일마다 줄끝이 다르다(CRLF/LF 섞임, 파일 하나 안에서는 같음). `.gitattributes`에서 `*.bat`만 CRLF로 고정.
 - **실행:** `Xetical.bat` (CRLF, ASCII 전용). 처음이면 `.venv`를 만들고 `requirements.txt`를 설치한 뒤 `pythonw main.pyw`를 실행한다.
