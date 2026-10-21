@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication, QMenu
 qapp = QApplication([])
 import xetical.config as C
 C.Config.save = lambda self: None
+C.CONFIG_PATH = SP / "config_none.json"  # 사용자 설정(data/config.json)이 아니라 기본값으로 시험한다
 import xetical.jobs as J
 J.OUTBOX_PATH = SP / "outbox_t.json"
 import xetical.model as M

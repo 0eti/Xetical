@@ -462,8 +462,8 @@ class CalendarWindow(QWidget):
             self._paint_month_lines(p, L)
         if L["mood_h"]:
             r = QRectF(m, m + L["H"] - L["cd_h"] - L["mood_h"], L["W"], L["mood_h"])
-            self.mood.paint(p, r, self.cfg, self.moods, date.today(), self._mood_font(),
-                            self._vgrad(r, self.cfg["cell_bg"], 0.5, 0.38), s)
+            # 배경은 투명(사용자 요청). 완전히 투명한 픽셀은 클릭이 바탕화면으로 빠지므로 1/255만 칠한다.
+            self.mood.paint(p, r, self.cfg, self.moods, date.today(), self._mood_font(), QColor(0, 0, 0, 1), s)
         else:
             self.mood.tabs, self.mood.boxes = [], []
         if L["cd_h"]:

@@ -3,6 +3,7 @@
 - 구글 캘린더와 동기화하지 않는다. 칠한 날은 이 PC의 data/moods.json에 {트래커 id: {"YYYY-MM-DD": "#색"}}으로 둔다.
 - 트래커 목록(이름·고를 색과 색 이름)은 설정 mood_trackers에 있다(설정 백업에 같이 들어간다).
 - 모양: week = 7줄(요일)×53열(주, GitHub 잔디처럼), month = 12줄(월)×31칸. 올해(1~12월)로 고정이다.
+  칸과 트래커 이름만 그린다(요일·월 이름, 색 범례 없음). 날짜와 색 이름은 마우스를 올리면 보인다.
 - 오늘과 지난 날만 칠할 수 있다.
 """
 from datetime import date, timedelta
@@ -12,7 +13,6 @@ from PySide6.QtGui import QColor, QFont, QFontMetrics, QPen
 
 from .config import MOODS_PATH, load_json, save_json
 
-WEEKDAY_SHORT = "월화수목금토일"
 
 
 class MoodData:
@@ -88,21 +88,25 @@ class MoodPanel:
         rows, cols, _ = self.grid(cfg, year)
         fm = QFontMetrics(font)
         pad = 6 * s
-        label_w = fm.horizontalAdvance("12월" if cfg["mood_layout"] == "month" else "월") + 6 * s
-        box = min((width - 2 * pad - label_w) / cols, 15 * s)
-        head = fm.height() + 6 * s                                      # 트래커 이름·색 이름 줄
-        months = fm.height() if cfg["mood_layout"] == "week" else 0     # 주 단위 위쪽 월 이름 줄
-        return {"rows": rows, "cols": cols, "pad": pad, "label_w": label_w, "box": max(box, 3.0),
-                "head": head, "months": months}
+        box = min((width - 2 * pad) / cols, 15 * s)
+        head = fm.height() + 4 * s  # 트래커 이름 줄(작게). 요일·월 이름과 색 범례는 두지 않는다(날짜는 풍선 도움말로)
+        return {"rows": rows, "cols": cols, "pad": pad, "box": max(box, 3.0), "head": head}
 
     def height(self, cfg, width, s, font, year):
-        k = self._metrics(cfg, width, s, font, year)
-        return round(k["head"] + k["months"] + k["rows"] * k["box"] + 2 * k["pad"])
+        k = self._metrics(cfg, width, s, self._small(font), year)
+        return round(k["head"] + k["rows"] * k["box"] + 2 * k["pad"])
+
+    @staticmethod
+    def _small(font):
+        f = QFont(font)
+        f.setPointSizeF(max(6.0, font.pointSizeF() * 0.85))
+        return f
 
     # ---------- 그리기 ----------
     def paint(self, p, rect, cfg, data, today, font, fill, s):
         self.tabs, self.boxes = [], []
         p.fillRect(rect, fill)
+        font = self._small(font)
         k = self._metrics(cfg, rect.width(), s, font, today.year)
         fm = QFontMetrics(font)
         text_color = QColor(cfg["item_font"]["color"])
@@ -111,7 +115,7 @@ class MoodPanel:
         p.setFont(font)
         tracker = active_tracker(cfg)
 
-        # 트래커 이름(누르면 바꿈) + 지금 트래커의 색 이름
+        # 트래커 이름(누르면 바꿈)
         x, y, h = rect.left() + k["pad"], rect.top() + k["pad"] / 2, k["head"] - k["pad"] / 2
         for t in cfg["mood_trackers"]:
             w = fm.horizontalAdvance(t["name"]) + 12 * s
@@ -132,40 +136,12 @@ class MoodPanel:
             p.setPen(dim)
             p.drawText(QRectF(x, y, rect.right() - x, h), Qt.AlignVCenter, "설정 → 트래커에서 트래커를 추가하세요")
             return
-        x += 10 * s
-        sw = fm.height() * 0.6
-        for c in tracker["colors"]:
-            if x + sw + fm.horizontalAdvance(c["label"]) > rect.right() - k["pad"]:
-                break
-            p.fillRect(QRectF(x, y + (h - sw) / 2, sw, sw), QColor(c["color"]))
-            x += sw + 3 * s
-            p.setPen(dim)
-            lw = fm.horizontalAdvance(c["label"])
-            p.drawText(QRectF(x, y, lw + 2, h), Qt.AlignVCenter, c["label"])
-            x += lw + 10 * s
 
         # 칸
         rows, cols, place = self.grid(cfg, today.year)
         box, gap = k["box"], max(1.0, k["box"] * 0.16)
-        left = rect.left() + k["pad"] + k["label_w"]
-        top = rect.top() + k["head"] + k["months"]
-        small = QFont(font)
-        small.setPointSizeF(max(6.0, font.pointSizeF() * 0.85))
-        p.setFont(small)
-        p.setPen(dim)
-        if cfg["mood_layout"] == "month":
-            for m in range(12):
-                p.drawText(QRectF(rect.left() + k["pad"], top + m * box, k["label_w"] - 4 * s, box),
-                           Qt.AlignVCenter | Qt.AlignRight, f"{m + 1}월")
-        else:
-            for row in (0, 2, 4, 6):  # 요일 이름은 한 줄 건너 하나씩(GitHub처럼)
-                wd = (row + cfg["week_start"]) % 7
-                p.drawText(QRectF(rect.left() + k["pad"], top + row * box, k["label_w"] - 4 * s, box),
-                           Qt.AlignVCenter | Qt.AlignRight, WEEKDAY_SHORT[wd])
-            for m in range(1, 13):
-                _r, col = place(date(today.year, m, 1))
-                p.drawText(QRectF(left + col * box, top - k["months"], 4 * box, k["months"]),
-                           Qt.AlignLeft | Qt.AlignBottom, f"{m}월")
+        left = rect.left() + k["pad"]
+        top = rect.top() + k["head"]
         empty = QColor(text_color)
         empty.setAlpha(28)
         future = QColor(text_color)
