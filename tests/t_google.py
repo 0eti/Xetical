@@ -167,6 +167,27 @@ try:
       days_ = sorted(x.start.date() for x in evs if x.title.endswith("종료일"))
       check("B10 종료일 1/6이면 1/4·1/5·1/6 세 번(1/7 없음)", days_ == [date(2027, 1, 4), date(2027, 1, 5), date(2027, 1, 6)], days_)
 
+      # ---------- 트래커 드라이브 동기화(앱 전용 폴더, 시험용 파일 이름) ----------
+      if g.has_drive_scope():
+          import xetical.gcal as G
+          real_name, G.MOODS_FILE = G.MOODS_FILE, "xetical-moods-test.json"  # 실제 트래커 파일은 건드리지 않는다
+          try:
+              loc = {"trackers": [{"id": "t", "name": "시험", "colors": []}], "trackers_t": 1.0,
+                     "days": {"t": {"2027-01-11": ["#00b050", 1.0]}}}
+              g.mood_sync(loc)
+              fid, got = g.mood_download()
+              check("트래커: 드라이브 앱 전용 폴더에 올리고 받기", got and got["days"] == loc["days"], got)
+              loc2 = {"trackers": loc["trackers"], "trackers_t": 1.0, "days": {"t": {"2027-01-12": ["#ff0000", 2.0]}}}
+              merged = g.mood_sync(loc2)
+              check("트래커: 다른 PC 내용과 합쳐짐", set(merged["days"]["t"]) == {"2027-01-11", "2027-01-12"}, merged)
+          finally:
+              fid, _got = g.mood_download()
+              if fid:
+                  g._drive().files().delete(fileId=fid).execute()
+              G.MOODS_FILE = real_name
+      else:
+          print("(드라이브 권한이 없어 트래커 동기화 시험은 건너뜀)", flush=True)
+
       # ---------- 검색 ----------
       found = g.search([c for c in cals if c["id"] == CAL], "Xetical 테스트", *RANGE)
       check("검색", any(x.id == eid for x in found))

@@ -86,12 +86,15 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
         self.cfg.setdefault("recent_colors", [])
         apply_ui_theme(self.cfg["ui_theme"])
         self.gcal = GCal()
+        self.gcal.want_drive = self.cfg["mood_sync"]
         self.worker = Worker()
         self.outbox = Outbox(self.gcal, self.worker)
         self.store = EventStore()
         self.store.load_cache()
         self.cell_colors = load_json(CELLS_PATH, {})
         self.moods = MoodData()
+        self._mood_syncing = self._mood_again = False
+        self.mood_timer = QTimer(self, singleShot=True, interval=3000, timeout=self.sync_moods)  # 칠한 뒤 잠시 모아서
         self._syncing = self._sync_again = False
         self._logging_in = False
         self._fix_url = None  # 상태 줄을 클릭하면 열 해결 페이지
@@ -453,6 +456,10 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
             apply_ui_theme(self.cfg["ui_theme"])
             if self._settings is not None:
                 self._settings.restyle()
+        if key in ("mood_sync", "mood_trackers"):
+            self.gcal.want_drive = self.cfg["mood_sync"]
+            if self.cfg["mood_sync"]:
+                self.mood_timer.start()
         if key in ("show_task_projection", "task_repeats"):
             self._project_task_repeats()
         if self._dayview is not None and self._dayview.isVisible():
@@ -514,6 +521,8 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
         tracker_id = tracker_id or active_tracker(self.cfg)["id"]
         old = self.moods.get(tracker_id, d)
         self.moods.set(tracker_id, d, color)
+        if self.cfg["mood_sync"]:
+            self.mood_timer.start()
         if record and old != color:
             self.push_undo("트래커", [], local=lambda: self.set_mood(d, old, tracker_id, record=False))
         self.win.update()
@@ -580,7 +589,7 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
         if isinstance(colors, dict):
             self.import_cell_colors(colors)
         if isinstance(moods, dict):
-            self.moods.merge(moods)
+            self.moods.restore(moods)
             self.win.update()
         return len(values)
 

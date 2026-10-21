@@ -2,6 +2,7 @@
 바꾸는 즉시 적용되고 저장된다(DesktopCal과 같다)."""
 import copy
 import os
+import time
 import uuid
 
 from PySide6.QtCore import Qt, QTime, QTimer
@@ -128,6 +129,7 @@ class TrackerEditor(QWidget):
         return copy.deepcopy(self.cfg["mood_trackers"])
 
     def _save(self, trackers, select=None):
+        self.cfg["mood_trackers_t"] = time.time()  # 드라이브 동기화에서 나중에 바꾼 목록을 고르는 데 쓴다
         self.win.set("mood_trackers", trackers)
         if not any(t["id"] == self.cfg["mood_active"] for t in trackers) and trackers:
             self.win.set("mood_active", trackers[0]["id"])
@@ -593,6 +595,9 @@ class SettingsWindow(QWidget):
         p.row("1월 1일 위치 (주 단위)", self.combo("mood_week_from", [("jan1", "왼쪽 위부터 차례로"),
                                                                 ("weekday", "요일 줄에 맞춤")]),
               hint="'요일 줄에 맞춤'이면 한 줄이 한 요일이라 요일별로 보기 좋지만, 1월 1일이 첫 열 중간에서 시작합니다.")
+        p.row("구글 드라이브에 동기화", self.onoff("mood_sync"),
+              hint="같은 구글 계정을 쓰는 PC끼리 트래커를 맞춥니다. 드라이브의 앱 전용 숨은 폴더에만 저장되고 "
+                   "드라이브 목록에는 보이지 않습니다. 처음 켜면 한 번 다시 로그인해야 합니다.")
         p.section("트래커와 색")
         p.widget_row(TrackerEditor(self))
         return p

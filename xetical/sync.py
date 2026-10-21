@@ -1,5 +1,6 @@
 """동기화: 구글에서 받아 와 화면에 반영하고, 보낼 편지함의 결과(다 보냄·막힘·실패)를 처리한다.
 App이 상속해서 쓴다(self는 App)."""
+import copy
 import logging
 from datetime import date, datetime, timedelta
 
@@ -90,12 +91,54 @@ class SyncMixin:
             self._refresh_cards()
             self._auto_delay()
             self._reselect()
+            self.sync_moods()
             if self._dayview is not None and self._dayview.isVisible():
                 self._dayview.refresh()
         self.win.update()
         if self._sync_again:
             self._sync_again = False
             self.sync()
+
+    # ---------- 트래커 드라이브 동기화 ----------
+    def sync_moods(self):
+        """트래커(칠한 날·트래커 목록)를 구글 드라이브 앱 전용 폴더와 맞춘다. 켜져 있을 때만."""
+        if not self.cfg["mood_sync"] or not self.gcal.has_token():
+            return
+        if not self.gcal.has_drive_scope():
+            self.set_status("트래커를 동기화하려면 다시 로그인 — 여기를 클릭", True)
+            return
+        if self._mood_syncing:
+            self._mood_again = True
+            return
+        self._mood_syncing = True
+        local = {"trackers": copy.deepcopy(self.cfg["mood_trackers"]), "trackers_t": self.cfg["mood_trackers_t"],
+                 "days": copy.deepcopy(self.moods.days)}
+        self.worker.submit(self.gcal.mood_sync, local, callback=self._on_moods_synced)
+
+    def _on_moods_synced(self, res, err):
+        self._mood_syncing = False
+        if err is not None:
+            if isinstance(err, ApiDisabledError):
+                self._fix_url = err.url
+                self.set_status(f"{err.api}가 꺼져 있음 — 여기를 클릭해 '사용' 누르기", True)
+            elif isinstance(err, AuthError):
+                self.set_status(f"{err} — 여기를 클릭", True)
+            else:  # 인터넷 끊김 등: 다음 동기화 때 합쳐서 다시 올린다(잃는 것 없음)
+                log.warning("트래커 동기화 실패: %s", err)
+        else:
+            if res["trackers_t"] > self.cfg["mood_trackers_t"]:  # 다른 PC에서 트래커 목록을 바꿨다
+                self.cfg["mood_trackers"], self.cfg["mood_trackers_t"] = res["trackers"], res["trackers_t"]
+                ids = [t["id"] for t in res["trackers"]]
+                if self.cfg["mood_active"] not in ids and ids:
+                    self.cfg["mood_active"] = ids[0]
+                self.cfg.save()
+                for tracker_id in [t for t in self.moods.days if t not in ids]:
+                    self.moods.drop(tracker_id)
+            self.moods.merge(res["days"])  # 동기화하는 사이 이 PC에서 칠한 것은 시각이 더 나중이라 남는다
+            self.win.update()
+        if self._mood_again:
+            self._mood_again = False
+            self.sync_moods()
 
     def _reselect(self):
         """동기화로 일정 객체가 새로 바뀌어도 선택은 유지한다."""

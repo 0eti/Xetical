@@ -1,11 +1,14 @@
 """트래커(무드 트래커·운동 체크 등): 달력 창 아래쪽에 올해 365칸을 보여 주고 날마다 색을 칠한다.
 
-- 구글 캘린더와 동기화하지 않는다. 칠한 날은 이 PC의 data/moods.json에 {트래커 id: {"YYYY-MM-DD": "#색"}}으로 둔다.
-- 트래커 목록(이름·고를 색과 색 이름)은 설정 mood_trackers에 있다(설정 백업에 같이 들어간다).
+- 칠한 날은 이 PC의 data/moods.json에 둔다: {"version": 2, "days": {트래커 id: {"YYYY-MM-DD": [색, 바꾼 시각]}}}
+  지운 날도 [""(빈 색), 바꾼 시각]으로 남겨 둔다(동기화할 때 '지웠다'는 것을 다른 PC에 알리려고).
+- 트래커 목록(이름·고를 색과 색 이름)은 설정 mood_trackers(바꾼 시각 mood_trackers_t)에 있다.
+- 설정에서 켜면 구글 드라이브의 앱 전용 숨은 폴더(appDataFolder)에 같은 내용을 올려 PC끼리 맞춘다(merge_sync).
 - 모양: week = 7줄×53열(1월 1일부터 차례로, 또는 줄 = 요일), month = 12줄(월)×31칸. 올해(1~12월)로 고정이다.
   칸과 트래커 이름만 그린다(요일·월 이름, 색 범례, 풍선 도움말 없음).
 - 오늘과 지난 날만, 칸을 더블클릭(또는 오른쪽 클릭)해서 칠한다. 한 번 클릭으로는 칠하지 않는다.
 """
+import time
 from datetime import date, timedelta
 
 from PySide6.QtCore import QRectF, Qt
@@ -14,36 +17,88 @@ from PySide6.QtGui import QColor, QFont, QFontMetrics, QPen
 from .config import MOODS_PATH, load_json, save_json
 
 
+def upgrade_days(raw):
+    """저장된 칠한 날 → {트래커 id: {날짜: [색, 시각]}}. 예전 모양({날짜: 색})은 시각 0으로 바꾼다."""
+    if isinstance(raw, dict) and raw.get("version") == 2:
+        raw = raw.get("days", {})
+    days = {}
+    for tracker_id, marks in (raw or {}).items():
+        if not isinstance(marks, dict):
+            continue
+        out = days.setdefault(tracker_id, {})
+        for d, v in marks.items():
+            if isinstance(v, str):
+                out[d] = [v, 0.0]
+            elif isinstance(v, list) and len(v) == 2:
+                out[d] = [v[0] or "", float(v[1] or 0)]
+    return days
+
+
+def merge_days(a, b):
+    """날짜마다 나중에 바꾼 쪽을 남긴다(지운 것도 '빈 색'으로 이긴다)."""
+    out = {t: dict(m) for t, m in a.items()}
+    for tracker_id, marks in b.items():
+        mine = out.setdefault(tracker_id, {})
+        for d, v in marks.items():
+            if d not in mine or v[1] > mine[d][1]:
+                mine[d] = list(v)
+    return out
+
+
+def merge_sync(local, remote):
+    """드라이브 동기화: 이 PC와 드라이브의 내용을 합친다.
+    local·remote = {"trackers": [...], "trackers_t": 시각, "days": {...}} (remote는 없으면 None)
+    트래커 목록은 나중에 바꾼 쪽 하나를 통째로 쓰고, 칠한 날은 날짜마다 나중 것을 쓴다.
+    합친 트래커 목록에 없는 트래커(지운 트래커)의 칠한 날은 버린다."""
+    if not remote:
+        return {"trackers": local["trackers"], "trackers_t": local["trackers_t"], "days": local["days"]}
+    newer = remote if remote.get("trackers_t", 0) > local["trackers_t"] else local
+    trackers = newer.get("trackers") or local["trackers"]
+    ids = {t["id"] for t in trackers}
+    days = merge_days(local["days"], upgrade_days(remote.get("days", {})))
+    return {"trackers": trackers, "trackers_t": newer.get("trackers_t", 0),
+            "days": {t: m for t, m in days.items() if t in ids}}
+
 
 class MoodData:
-    """칠한 날짜: {트래커 id: {"YYYY-MM-DD": "#색"}}"""
+    """칠한 날짜: {트래커 id: {"YYYY-MM-DD": [색, 바꾼 시각]}}"""
 
     def __init__(self, path=MOODS_PATH):
         self.path = path
-        self.days = load_json(path, {})
+        self.days = upgrade_days(load_json(path, {}))
+
+    def _save(self):
+        save_json(self.path, {"version": 2, "days": self.days})
 
     def get(self, tracker_id, d):
-        return self.days.get(tracker_id, {}).get(d.isoformat(), "")
+        v = self.days.get(tracker_id, {}).get(d.isoformat())
+        return v[0] if v else ""
 
     def set(self, tracker_id, d, color):
-        marks = self.days.setdefault(tracker_id, {})
-        if color:
-            marks[d.isoformat()] = color
-        else:
-            marks.pop(d.isoformat(), None)
-        save_json(self.path, self.days)
+        self.days.setdefault(tracker_id, {})[d.isoformat()] = [color or "", time.time()]
+        self._save()
 
     def drop(self, tracker_id):
         """트래커를 지우면 칠한 기록도 지운다."""
         if self.days.pop(tracker_id, None) is not None:
-            save_json(self.path, self.days)
+            self._save()
 
     def merge(self, days):
-        """설정 가져오기: 같은 날짜는 가져온 쪽으로 덮어쓴다."""
-        for tracker_id, marks in days.items():
-            if isinstance(marks, dict):
-                self.days.setdefault(tracker_id, {}).update(marks)
-        save_json(self.path, self.days)
+        """동기화: 날짜마다 나중에 바꾼 쪽을 남긴다."""
+        self.days = merge_days(self.days, upgrade_days(days))
+        self._save()
+
+    def restore(self, days):
+        """설정 백업 가져오기: 백업에 있는 날은 백업 쪽으로 덮어쓴다(지금 시각으로 찍어 다른 PC에도 퍼진다)."""
+        now = time.time()
+        for tracker_id, marks in upgrade_days(days).items():
+            for d, (color, _t) in marks.items():
+                self.days.setdefault(tracker_id, {})[d] = [color, now]
+        self._save()
+
+    def replace(self, days):
+        self.days = days
+        self._save()
 
 
 def active_tracker(cfg):

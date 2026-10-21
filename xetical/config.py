@@ -143,6 +143,8 @@ DEFAULTS = {
         {"id": "workout", "name": "운동", "colors": [{"color": "#0070c0", "label": "운동함"}]},
     ],
     "mood_active": "mood",         # 지금 보이는 트래커 id
+    "mood_trackers_t": 0.0,        # 트래커 목록을 마지막으로 바꾼 시각(드라이브 동기화에서 나중 것을 고른다)
+    "mood_sync": False,            # 구글 드라이브 앱 전용 폴더로 트래커 동기화
 }
 
 # 예전 버전 설정 이름 → 새 이름

@@ -207,10 +207,125 @@ a.set_mood(T, "#ffc000")
 path = SP / "backup_t.json"
 a.export_settings(str(path))
 saved = json.loads(path.read_text("utf-8"))
-check("설정 백업에 트래커 목록과 칠한 날", "mood_trackers" in saved and saved["moods"]["mood"][T.isoformat()] == "#ffc000")
+check("설정 백업에 트래커 목록과 칠한 날", "mood_trackers" in saved and saved["moods"]["mood"][T.isoformat()][0] == "#ffc000")
 a.set_mood(T, "")
 a.import_settings_file(str(path))
 check("백업 가져오기로 칠한 날 복원", a.moods.get("mood", T) == "#ffc000")
+
+# ================================================================ 구글 드라이브 동기화
+# ---------- 저장 모양 ----------
+old = MD.upgrade_days({"mood": {"2026-01-01": "#ff0000"}})
+check("예전 저장 모양(날짜: 색)을 시각 0으로 바꿔 읽음", old == {"mood": {"2026-01-01": ["#ff0000", 0.0]}}, old)
+fresh_data = MD.MoodData(SP / "moods_y.json")
+fresh_data.set("mood", T, "#00b050")
+fresh_data.set("mood", T, "")
+check("지운 날은 '빈 색 + 시각'으로 남김(다른 PC에 지웠다고 알리려고)",
+      MD.MoodData(SP / "moods_y.json").days["mood"][T.isoformat()][0] == "" and fresh_data.get("mood", T) == "")
+
+# ---------- 합치기 규칙 ----------
+TR_A = [{"id": "mood", "name": "기분", "colors": []}]
+TR_B = [{"id": "mood", "name": "기분", "colors": []}, {"id": "run", "name": "달리기", "colors": []}]
+local = {"trackers": TR_A, "trackers_t": 10.0, "days": {"mood": {"2026-03-01": ["#red", 5.0], "2026-03-02": ["#a", 9.0]}}}
+remote = {"trackers": TR_B, "trackers_t": 20.0,
+          "days": {"mood": {"2026-03-01": ["", 7.0], "2026-03-02": ["#b", 3.0], "2026-03-03": ["#c", 1.0]},
+                   "run": {"2026-03-01": ["#g", 2.0]}}}
+m = MD.merge_sync(local, remote)
+check("합치기: 날짜마다 나중에 바꾼 쪽(지운 것도 이김)", m["days"]["mood"] == {
+    "2026-03-01": ["", 7.0], "2026-03-02": ["#a", 9.0], "2026-03-03": ["#c", 1.0]}, m["days"])
+check("합치기: 트래커 목록은 나중에 바꾼 쪽", m["trackers"] == TR_B and m["trackers_t"] == 20.0 and "run" in m["days"])
+m2 = MD.merge_sync({"trackers": TR_B, "trackers_t": 30.0, "days": {}}, {"trackers": TR_A, "trackers_t": 20.0,
+                                                                     "days": {"gone": {"2026-03-01": ["#x", 1.0]}}})
+check("합치기: 지운 트래커의 칠한 날은 버림", "gone" not in m2["days"] and m2["trackers"] == TR_B)
+check("합치기: 드라이브에 아직 없으면 이 PC 것 그대로", MD.merge_sync(local, None)["days"] == local["days"])
+
+
+# ---------- 드라이브 파일 읽고 쓰기(가짜 드라이브 API) ----------
+class _Req:
+    def __init__(self, fn):
+        self.fn = fn
+
+    def execute(self, num_retries=0):
+        return self.fn()
+
+
+class _Files:
+    def __init__(self, store):
+        self.store = store
+
+    def list(self, **kw):
+        assert kw.get("spaces") == "appDataFolder"
+        return _Req(lambda: {"files": [{"id": "f1"}] if "f1" in self.store else []})
+
+    def get_media(self, fileId):
+        return _Req(lambda: self.store[fileId])
+
+    def create(self, body, media_body, fields):
+        assert body["parents"] == ["appDataFolder"]
+        self.store["f1"] = media_body.getbytes(0, media_body.size())
+        return _Req(lambda: {"id": "f1"})
+
+    def update(self, fileId, media_body):
+        self.store[fileId] = media_body.getbytes(0, media_body.size())
+        self.store["updates"] = self.store.get("updates", 0) + 1
+        return _Req(lambda: {"id": fileId})
+
+
+class _Drive:
+    def __init__(self):
+        self.store = {}
+
+    def files(self):
+        return _Files(self.store)
+
+
+from xetical.gcal import GCal
+g = GCal()
+drive = _Drive()
+g._drive = lambda: drive
+first = g.mood_sync(local)
+check("드라이브: 처음이면 앱 전용 폴더에 파일을 만들어 올림", "f1" in drive.store
+      and json.loads(drive.store["f1"])["days"] == local["days"])
+other_pc = {"trackers": TR_A, "trackers_t": 10.0, "days": {"mood": {"2026-03-05": ["#z", 50.0]}}}
+merged = g.mood_sync(other_pc)
+check("드라이브: 다른 PC가 받으면 둘이 합쳐짐", merged["days"]["mood"].keys() >= {"2026-03-01", "2026-03-05"}
+      and json.loads(drive.store["f1"])["days"]["mood"]["2026-03-05"] == ["#z", 50.0])
+before = drive.store.get("updates", 0)
+g.mood_sync(merged)
+check("드라이브: 바뀐 게 없으면 다시 올리지 않음", drive.store.get("updates", 0) == before)
+
+# ---------- 앱: 켜기·다시 로그인 안내·받은 내용 반영 ----------
+class SyncG(FakeG):
+    scope = False
+    remote = None
+
+    def has_drive_scope(self):
+        return self.scope
+
+    def mood_sync(self, loc):
+        return MD.merge_sync(loc, self.remote)
+
+
+sg = SyncG()
+a.gcal = sg
+a.cfg["mood_sync"] = True
+a.set_status("")
+a.sync_moods()
+check("드라이브 권한이 없으면 '다시 로그인' 안내", "다시 로그인" in w.status and w.status_clickable, w.status)
+sg.scope = True
+a.cfg["mood_trackers_t"] = 1.0
+sg.remote = {"trackers": [{"id": "mood", "name": "기분", "colors": [{"color": "#00b050", "label": "좋음"}]},
+                          {"id": "sleep", "name": "잠", "colors": [{"color": "#7030a0", "label": "푹 잠"}]}],
+             "trackers_t": 99.0, "days": {"sleep": {T.isoformat(): ["#7030a0", 1e12]}}}
+import time as _time
+a.sync_moods()
+end = _time.time() + 5
+while a._mood_syncing and _time.time() < end:
+    qapp.processEvents()
+    _time.sleep(0.02)
+check("앱: 다른 PC에서 바꾼 트래커 목록을 받아 옴", [t["id"] for t in a.cfg["mood_trackers"]] == ["mood", "sleep"]
+      and a.cfg["mood_trackers_t"] == 99.0, a.cfg["mood_trackers"])
+check("앱: 다른 PC에서 칠한 날을 받아 옴", a.moods.get("sleep", T) == "#7030a0")
+check("앱: 목록에서 빠진 트래커(운동)의 기록은 지움", "workout" not in a.moods.days)
 
 a.shutdown()
 print(f"\n{sum(ok for _, ok in results)}/{len(results)} 통과")

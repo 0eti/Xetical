@@ -61,7 +61,7 @@ UNUSED = [
     "PySide6/plugins/platforms/qoffscreen.dll",
     "PySide6/translations",                           # Qt 번역(QTranslator를 쓰지 않는다)
 ]
-KEEP_DOCS = {"calendar.v3.json", "tasks.v1.json"}
+KEEP_DOCS = {"calendar.v3.json", "tasks.v1.json", "drive.v3.json"}  # 드라이브: 트래커 동기화
 
 
 def prune(internal):
@@ -71,7 +71,7 @@ def prune(internal):
             shutil.rmtree(p)
         elif p.exists():
             p.unlink()
-    # googleapiclient 훅이 구글 API 설명 600개(111MB)를 모두 넣는다 → 두 개만 남긴다
+    # googleapiclient 훅이 구글 API 설명 600개(111MB)를 모두 넣는다 → 쓰는 것만 남긴다
     for f in (internal / "googleapiclient" / "discovery_cache" / "documents").glob("*.json"):
         if f.name not in KEEP_DOCS:
             f.unlink()
@@ -90,9 +90,10 @@ def main():
            "--name", "Xetical", "--icon", str(ico),
            "--distpath", str(ROOT / "dist"), "--workpath", str(ROOT / "build"), "--specpath", str(ROOT / "build"),
            "--add-data", f"{ROOT / 'README.md'}{sep}.",
-           # 구글 API 설명 파일은 600개(111MB)가 있지만 Calendar·Tasks 둘만 쓴다
+           # 구글 API 설명 파일은 600개(111MB)가 있지만 Calendar·Tasks·Drive만 쓴다
            "--add-data", f"{docs / 'calendar.v3.json'}{sep}{dest}",
            "--add-data", f"{docs / 'tasks.v1.json'}{sep}{dest}",
+           "--add-data", f"{docs / 'drive.v3.json'}{sep}{dest}",
            "--exclude-module", "PySide6.QtNetwork", "--exclude-module", "PySide6.QtQml",
            "--exclude-module", "PySide6.QtQuick", "--exclude-module", "PySide6.QtWebEngineCore",
            str(ROOT / "main.pyw")]

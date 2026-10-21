@@ -9,9 +9,11 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from googleapiclient.http import MediaInMemoryUpload
 
 from .config import CLIENT_SECRET_PATH, TOKEN_PATH
 from .model import KEEP, NO_REPEAT, Event
+from .mood import merge_sync
 
 SCOPES = [
     "https://www.googleapis.com/auth/calendar.readonly",
@@ -19,6 +21,8 @@ SCOPES = [
     "https://www.googleapis.com/auth/tasks",
 ]
 TASKS_SCOPE = SCOPES[-1]
+DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.appdata"  # 트래커 동기화를 켰을 때만 받는다(앱 전용 숨은 폴더)
+MOODS_FILE = "xetical-moods.json"
 TASK_COLOR = "#4285f4"
 
 # DesktopCal '휴가 지역'에 대응하는 구글 공휴일 캘린더(이름은 한국어로 받는다)
@@ -43,7 +47,8 @@ class ApiDisabledError(Exception):
     def __init__(self, url):
         super().__init__("Google API가 꺼져 있습니다.")
         self.url = url
-        self.api = "Google Tasks API" if "tasks.googleapis.com" in url else "Google Calendar API"
+        self.api = ("Google Tasks API" if "tasks.googleapis.com" in url else
+                    "Google Drive API" if "drive.googleapis.com" in url else "Google Calendar API")
 
 
 def is_transient(e):
@@ -143,6 +148,7 @@ class GCal:
         self._svc = None
         self._event_colors = None
         self._tz = None  # 기본 캘린더의 시간대 이름(예: Asia/Seoul)
+        self.want_drive = False  # 트래커 드라이브 동기화를 켰으면 로그인할 때 드라이브 권한도 받는다(app이 정한다)
 
     # ---------- 인증 ----------
     @staticmethod
@@ -154,7 +160,8 @@ class GCal:
         return TOKEN_PATH.exists()
 
     def login(self):
-        flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRET_PATH), SCOPES)
+        scopes = SCOPES + ([DRIVE_SCOPE] if self.want_drive else [])
+        flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRET_PATH), scopes)
         creds = flow.run_local_server(
             port=0, open_browser=True, timeout_seconds=300,
             authorization_prompt_message="",
@@ -186,7 +193,7 @@ class GCal:
             TOKEN_PATH.write_text(self._creds.to_json(), "utf-8")
         if self._svc is None:
             self._svc = build("calendar", "v3", credentials=self._creds, cache_discovery=False)
-            self._tasks_svc = None
+            self._tasks_svc = self._drive_svc = None
         return self._svc
 
     def _tasks(self):
@@ -196,11 +203,60 @@ class GCal:
         return self._tasks_svc
 
     @staticmethod
-    def has_tasks_scope():
+    def _token_scopes():
         try:
-            return TASKS_SCOPE in json.loads(TOKEN_PATH.read_text("utf-8")).get("scopes", [])
+            return json.loads(TOKEN_PATH.read_text("utf-8")).get("scopes", [])
         except (OSError, ValueError):
-            return False
+            return []
+
+    @classmethod
+    def has_tasks_scope(cls):
+        return TASKS_SCOPE in cls._token_scopes()
+
+    @classmethod
+    def has_drive_scope(cls):
+        return DRIVE_SCOPE in cls._token_scopes()
+
+    def _drive(self):
+        self._service()  # 로그인·토큰 갱신
+        if getattr(self, "_drive_svc", None) is None:
+            self._drive_svc = build("drive", "v3", credentials=self._creds, cache_discovery=False)
+        return self._drive_svc
+
+    # ---------- 트래커 드라이브 동기화(앱 전용 숨은 폴더) ----------
+    def mood_download(self):
+        """(파일 id, 내용 dict) — 아직 없으면 (None, None)"""
+        svc = self._drive()
+        r = self._call(svc.files().list(spaces="appDataFolder", q=f"name = '{MOODS_FILE}'", fields="files(id)",
+                                        pageSize=10))
+        files = r.get("files", [])
+        if not files:
+            return None, None
+        file_id = files[0]["id"]
+        body = self._call(svc.files().get_media(fileId=file_id))
+        try:
+            data = json.loads(body.decode("utf-8") if isinstance(body, bytes) else body)
+        except ValueError:
+            data = None  # 깨진 파일은 이 PC 내용으로 덮어쓴다
+        return file_id, data if isinstance(data, dict) else None
+
+    def mood_upload(self, file_id, data):
+        """파일 id를 돌려준다(처음이면 만든다)."""
+        svc = self._drive()
+        media = MediaInMemoryUpload(json.dumps(data, ensure_ascii=False).encode("utf-8"), mimetype="application/json")
+        if file_id:
+            self._call(svc.files().update(fileId=file_id, media_body=media))
+            return file_id
+        return self._call(svc.files().create(body={"name": MOODS_FILE, "parents": ["appDataFolder"]},
+                                             media_body=media, fields="id"))["id"]
+
+    def mood_sync(self, local):
+        """드라이브 내용과 합쳐 다시 올리고, 합친 내용을 돌려준다(작업 스레드에서)."""
+        file_id, remote = self.mood_download()
+        merged = merge_sync(local, remote)
+        if merged != remote:
+            self.mood_upload(file_id, merged)
+        return merged
 
     def _translate(self, e):
         """HttpError/RefreshError → 앱 예외로 바꾼다. 바꿀 게 없으면 None."""
