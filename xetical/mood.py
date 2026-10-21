@@ -3,7 +3,7 @@
 - 구글 캘린더와 동기화하지 않는다. 칠한 날은 이 PC의 data/moods.json에 {트래커 id: {"YYYY-MM-DD": "#색"}}으로 둔다.
 - 트래커 목록(이름·고를 색과 색 이름)은 설정 mood_trackers에 있다(설정 백업에 같이 들어간다).
 - 모양: week = 7줄×53열(1월 1일부터 차례로, 또는 줄 = 요일), month = 12줄(월)×31칸. 올해(1~12월)로 고정이다.
-  칸과 트래커 이름만 그린다(요일·월 이름, 색 범례 없음). 날짜와 색 이름은 마우스를 올리면 보인다.
+  칸과 트래커 이름만 그린다(요일·월 이름, 색 범례, 풍선 도움말 없음).
 - 오늘과 지난 날만, 칸을 더블클릭(또는 오른쪽 클릭)해서 칠한다. 한 번 클릭으로는 칠하지 않는다.
 """
 from datetime import date, timedelta
@@ -49,10 +49,6 @@ class MoodData:
 def active_tracker(cfg):
     trackers = cfg["mood_trackers"]
     return next((t for t in trackers if t["id"] == cfg["mood_active"]), trackers[0] if trackers else None)
-
-
-def color_label(tracker, color):
-    return next((c["label"] for c in tracker["colors"] if c["color"].lower() == color.lower()), "") if tracker else ""
 
 
 class MoodPanel:

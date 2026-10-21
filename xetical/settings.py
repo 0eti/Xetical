@@ -111,7 +111,7 @@ class TrackerEditor(QWidget):
         self.add_color = QPushButton("색 추가")
         self.add_color.clicked.connect(self._add_color)
         right = QVBoxLayout()
-        hint = QLabel("칸을 더블클릭하면 아래 색 중에서 고릅니다. 이름은 고르는 메뉴와, 칸에 마우스를 올렸을 때 보입니다.")
+        hint = QLabel("칸을 더블클릭하면 아래 색 중에서 고릅니다. 이름은 고르는 메뉴에 보입니다.")
         hint.setObjectName("hint")
         hint.setWordWrap(True)
         right.addWidget(hint)

@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QToolTip, QWidget
 from . import desktop
 from .almanac import lunar, solar_term, week_number
 from .model import COUNTDOWN_TYPES
-from .mood import MoodPanel, active_tracker, color_label
+from .mood import MoodPanel
 
 WEEKDAY_NAMES = ["월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일"]
 WEEKDAY_EN = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -750,15 +750,6 @@ class CalendarWindow(QWidget):
     def _mood_font(self):
         return make_font(self.cfg["item_font"], 0.8, bold=False)
 
-    def mood_tip(self, d):
-        tracker = active_tracker(self.cfg)
-        color = self.moods.get(tracker["id"], d) if tracker and self.moods else ""
-        label = color_label(tracker, color) if color else ""
-        text = f"{d.month}월 {d.day}일 ({weekday_name(d.weekday(), self.cfg, 'short')})"
-        if not color:
-            return ""  # 빈 칸에는 풍선 도움말을 띄우지 않는다(사용자 요청)
-        return f"{text} · {label}" if label else text
-
     def _bar_items(self):
         out = []
         for ev in self.countdowns:
@@ -959,15 +950,11 @@ class CalendarWindow(QWidget):
             self._hover_btn, self._hover_day = btn, day
             self.update()
         ev = None if self.adjusting else self._event_at(pos)
-        mood = None if self.adjusting or ev or btn else self.mood.hit(pos)
-        mood_day = mood[1] if mood and mood[0] == "box" else None
-        tip = ev or (("btn", btn) if btn else None) or (("mood", mood_day) if mood_day else None)
+        tip = ev or (("btn", btn) if btn else None)  # 트래커 칸에는 풍선 도움말을 띄우지 않는다(사용자 요청)
         if tip != self._tip:
             self._tip = tip
             if ev:
                 QToolTip.showText(gpos, tooltip_text(ev, self.store, self.cfg), self)
-            elif mood_day:
-                QToolTip.showText(gpos, self.mood_tip(mood_day), self)
             elif btn:
                 QToolTip.showText(gpos, self.button_tip(btn), self)
             else:
