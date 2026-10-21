@@ -34,7 +34,7 @@ LOCK_PATH = DATA_DIR / "xetical.lock"
 LOG_PATH = DATA_DIR / "xetical.log"
 README_PATH = BASE_DIR / "README.md"
 
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.1"
 
 # 설정 백업에서 빼는 항목(이 PC에만 의미가 있는 값)
 LOCAL_ONLY_KEYS = {"geometry", "card_positions", "summary_last", "editor_size"}
