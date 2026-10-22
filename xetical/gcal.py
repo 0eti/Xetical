@@ -1,4 +1,5 @@
 """Google Calendar API 연동. 모든 메서드는 블로킹이므로 작업 스레드에서만 호출한다."""
+import hashlib
 import json
 import logging
 import re
@@ -15,7 +16,7 @@ from googleapiclient.http import MediaInMemoryUpload
 from .config import CLIENT_SECRET_PATH, TOKEN_PATH
 from .model import KEEP, NO_REPEAT, Event, parse_alarm
 from .mood import merge_sync
-from .todos import repeat_dates, todo_values
+from .todos import anchor_day, repeat_dates, todo_values
 
 SCOPES = [
     "https://www.googleapis.com/auth/calendar.readonly",
@@ -595,6 +596,8 @@ class GCal:
             # 예전 반복의 뒤쪽 예외(지운 회차·회차마다 둔 완료 표시)는 새 반복에 옮긴다(앞쪽을 자르면 사라진다).
             # 규칙을 바꿨으면 회차 날짜가 달라져 옮기지 않는다. 자르기 전에 읽어야 다시 보내도 같은 결과가 된다.
             exdates, marks = self._later_exceptions(ev, master, v) if same and rule else ([], [])
+            if "done_here" in v:  # 연 회차의 완료는 새 반복의 첫 회차에만(반복 전체로 퍼지지 않게)
+                marks.append((v["start"], {P_DONE: "1" if v["done_here"] else ""}, None))
             # 뒤쪽 반복을 먼저 만들고(미리 정한 id라 다시 보내도 409로 막힌다) 그다음 앞쪽을 자른다.
             # 거꾸로 하면 자른 직후 끊겼을 때 다시 보내면서 잘린 규칙을 원래 규칙으로 읽게 된다.
             new_id = self.create_event(dict(v, recurrence=rule, exdates=exdates))
@@ -641,6 +644,9 @@ class GCal:
             keep = [r for r in master.get("recurrence", []) if not r.upper().startswith("RRULE:")]
             body["recurrence"] = keep + [rule] if rule else []
         self._call(svc.events().patch(calendarId=ev.calendar_id, eventId=ev.recurring_event_id, body=body))
+        if "done_here" in v:  # 연 회차의 완료는 그 회차에만(원본에 쓰면 반복 전체가 완료된다)
+            mark = {P_DONE: "1" if v["done_here"] else ""}
+            self._mark_instances(v, ev.recurring_event_id, [(v["start"], mark, None)])
 
     def _remaining_rule(self, ev, rule):
         """'이번과 이후'로 나눈 뒤쪽 규칙: UNTIL은 그대로 두고, COUNT는 앞쪽에서 이미 지나간 횟수만큼 뺀다."""
@@ -894,28 +900,31 @@ class GCal:
             if not page:
                 return out
 
-    def find_todo_series(self, cal_id, title):
-        """그 캘린더에 제목이 같은 반복 할 일(반복 일정 + 할 일 표시)이 이미 있는가."""
-        return any("recurrence" in it and it.get("summary") == title and it.get("status") != "cancelled"
-                   for it in self._list_events(cal_id, None, None, private=f"{P_TODO}=1", single=False))
-
     def migrate_repeat(self, list_id, title, rule, cal_id, today):
         """예전 반복 할 일(구글에는 지금 회차 할 일 하나, 규칙은 이 PC에만)을 반복 일정으로 옮긴다 → none | exists | created.
         - 마감일이 가장 늦은 할 일이 미완료면 그 날짜부터 시작하고 그 할 일은 지운다(같은 날 두 번 보이지 않게).
           완료면 오늘이거나 오늘 뒤인 첫 회차부터 시작하고 할 일은 둔다. 지난 완료 기록은 그대로 둔다.
-        - 이미 옮긴 반복 일정이 있으면(다른 PC가 먼저 옮겼거나 다시 보낸 것) 만들지 않고 할 일만 정리한다."""
+        - 29~31일 매월·2월 29일 매년은 말일로 당겨진 회차에서 원래 날짜를 찾아 규칙에 쓴다(anchor_day).
+        - 반복 일정 id는 목록·제목으로 정해 둔다: 다시 보내거나 다른 PC가 먼저 옮겼으면 409로 막히고(만들지 않음),
+          그때는 할 일만 정리한다. 다른 목록의 같은 제목·같은 제목의 다른 반복 할 일과는 헷갈리지 않는다."""
         tasks = self.todo_tasks(list_id, title)
         if not tasks:
             return "none"
         latest = max(tasks, key=lambda e: e.start)
-        result = "exists"
-        if not self.find_todo_series(cal_id, title):
-            start = latest.start
-            if latest.done:
-                later = repeat_dates(latest.start, rule, max(today, latest.start) + timedelta(days=800))
-                start = next((d for d in later if d >= today), today)
-            self.create_event(todo_values(title, latest.description, start, rule, cal_id))
+        anchor = anchor_day(latest.start, [t.start for t in tasks], rule)
+        start = latest.start
+        if latest.done:
+            later = repeat_dates(latest.start, rule, max(today, latest.start) + timedelta(days=800), anchor)
+            start = next((d for d in later if d >= today), today)
+        v = dict(todo_values(title, latest.description, start, rule, cal_id, anchor),
+                 event_id=hashlib.sha1(f"xetical-todo|{list_id}|{title}".encode()).hexdigest())
+        try:
+            self._call(self._service().events().insert(calendarId=cal_id, body=self._body(v, True)))
             result = "created"
+        except HttpError as e:
+            if e.resp.status != 409:
+                raise
+            result = "exists"
         if not latest.done:
             self.delete_task(latest)
         return result

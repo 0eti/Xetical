@@ -123,7 +123,15 @@ class TaskMixin:
                 rec = KEEP
             vals = dict(ev.values(), title=v["title"], description=v["notes"], start=v["due"], end=v["due"],
                         done=v["done"], line=False, todo=True, recurrence=rec)
+            if scope != "one":  # 완료는 연 회차에만(반복 전체가 완료되지 않게)
+                vals["done"] = ev.done
+                if v["done"] != ev.done:
+                    vals["done_here"] = v["done"]
             self.outbox.add("update_event", ev, vals, scope, label="반복 할 일 수정")
+            if scope == "one":  # 그 회차만 고친 것은 되돌릴 수 있다(일정 창의 '이번 일정만'과 같다)
+                after = self._event_from_values(ev.id, vals)
+                after.recurring, after.recurring_event_id = True, ev.recurring_event_id
+                self.push_undo("반복 할 일 수정", [("update_event", [after, ev.values(), "one"], [])])
         self.sync()
 
     def _migrate_repeats(self):

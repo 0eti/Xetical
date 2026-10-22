@@ -38,10 +38,27 @@ def repeat_dates(base, rule, until, day=None):
     return out
 
 
-def todo_rrule(rule, day):
+def anchor_day(day, earlier, rule):
+    """월·연 반복의 원래 날짜. day가 달의 말일이면(31일이 30일·28일로 당겨졌을 수 있다) 바로 앞 회차들(earlier)부터
+    거슬러 보며 가장 큰 날짜를 고르고, 말일이 아닌 회차(당겨지지 않은 진짜 날짜)를 만나면 멈춘다."""
+    if rule not in ("monthly", "yearly"):
+        return None
+    d = day.day
+    if d != pycal.monthrange(day.year, day.month)[1]:
+        return d
+    for x in sorted((e for e in earlier if e < day and (rule == "monthly" or e.month == day.month)), reverse=True):
+        d = max(d, x.day)
+        if x.day != pycal.monthrange(x.year, x.month)[1]:
+            break
+    return d
+
+
+def todo_rrule(rule, day, anchor=None):
     """'새 할 일' 창의 반복 종류 → day에 시작하는 RRULE. 29~31일 매월·2월 29일 매년은
-    짧은 달(해)에는 그 달 말일에 오게 한다(BYSETPOS=-1: 고른 날짜들 중 그 달에 있는 마지막 날)."""
+    짧은 달(해)에는 그 달 말일에 오게 한다(BYSETPOS=-1: 고른 날짜들 중 그 달에 있는 마지막 날).
+    anchor: 원래 날짜(day가 말일로 당겨진 회차일 때, anchor_day)."""
     wd = WD_CODES[day.weekday()]
+    n = max(anchor or day.day, day.day)
     if rule == "daily":
         return "RRULE:FREQ=DAILY"
     if rule == "weekly":
@@ -49,11 +66,11 @@ def todo_rrule(rule, day):
     if rule == "biweekly":
         return f"RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY={wd}"
     if rule == "monthly":
-        if day.day <= 28:
-            return f"RRULE:FREQ=MONTHLY;BYMONTHDAY={day.day}"
-        return f"RRULE:FREQ=MONTHLY;BYMONTHDAY={','.join(str(d) for d in range(28, day.day + 1))};BYSETPOS=-1"
+        if n <= 28:
+            return f"RRULE:FREQ=MONTHLY;BYMONTHDAY={n}"
+        return f"RRULE:FREQ=MONTHLY;BYMONTHDAY={','.join(str(d) for d in range(28, n + 1))};BYSETPOS=-1"
     if rule == "yearly":
-        if (day.month, day.day) == (2, 29):
+        if (day.month, n) == (2, 29):
             return "RRULE:FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=28,29;BYSETPOS=-1"
         return "RRULE:FREQ=YEARLY"
     raise ValueError(f"모르는 반복: {rule}")
@@ -67,8 +84,8 @@ def rule_of(rrule, day):
     return next((r for r in TODO_RULES if parse_rrule(todo_rrule(r, day)) == p), None)
 
 
-def todo_values(title, notes, day, rule, calendar_id):
+def todo_values(title, notes, day, rule, calendar_id, anchor=None):
     """반복 할 일을 만들 일정 편집 값(일정 창의 values()와 같은 모양)."""
     return {"title": title, "all_day": True, "start": day, "end": day, "calendar_id": calendar_id,
             "description": notes, "location": "", "done": False, "text_color": "", "order": 0, "line": False,
-            "alarm": "", "countdown": "", "todo": True, "recurrence": todo_rrule(rule, day)}
+            "alarm": "", "countdown": "", "todo": True, "recurrence": todo_rrule(rule, day, anchor)}

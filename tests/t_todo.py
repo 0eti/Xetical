@@ -26,6 +26,7 @@ import xetical.app as A
 A.CELLS_PATH = SP / "cells_t.json"
 A.config.CACHE_PATH = C.CACHE_PATH
 A.MoodData = lambda: MD.MoodData(SP / "moods_t.json")
+from googleapiclient.errors import HttpError
 from xetical.dialogs import rule_dates
 from xetical.gcal import GCal, _props_values, event_props
 from xetical.model import Event
@@ -79,6 +80,10 @@ class Batch:
             self.cb(rid, r.execute(), None)
 
 
+class Resp409(dict):
+    status, reason = 409, "Conflict"
+
+
 class FakeSvc:
     """캘린더(events.*)와 할 일(tasks.*)을 함께 흉내 낸다. 돌려줄 목록은 함수로 정해 둔다."""
 
@@ -89,6 +94,7 @@ class FakeSvc:
         self.instances = lambda kw: []
         self.lists = lambda kw: []
         self.task_items = lambda kw: []
+        self.inserted = set()
 
     def __getattr__(self, name):
         return lambda: Coll(self, name)
@@ -107,7 +113,11 @@ class FakeSvc:
         if kind == "events.list":
             return {"items": self.lists(kw)}
         if kind == "events.insert":
-            return {"id": kw["body"].get("id") or "new1"}
+            eid = kw["body"].get("id")
+            if eid and eid in self.inserted:  # 구글처럼 같은 id로 또 만들면 409
+                raise HttpError(Resp409(), b"{}")
+            self.inserted.add(eid)
+            return {"id": eid or "new1"}
         if kind == "tasks.list":
             return {"items": self.task_items(kw)}
         if kind == "tasks.insert":
@@ -513,10 +523,13 @@ check("5 최신이 완료면 오늘 이후 첫 회차부터, 할 일은 안 지�
 g, svc = mig([task_item("other", FRI, title="장보기")])
 check("5 그 제목의 할 일이 없으면 아무것도 안 만듦",
       g.migrate_repeat("L1", "손톱 깎기", "weekly", "me", TODAY) == "none" and not svc.calls("events.insert"))
-g, svc = mig([task_item("new_task_id", FRI)], series=True)
-r = g.migrate_repeat("L1", "손톱 깎기", "weekly", "me", TODAY)
-check("5 (Review 3) 이미 옮긴 반복 일정이 있으면 다시 만들지 않고 할 일만 지움(다른 PC·다시 보내기)",
-      r == "exists" and not svc.calls("events.insert") and deleted(svc) == ["new_task_id"], (r, svc.log))
+g, svc = mig([task_item("new_task_id", FRI)])
+r1 = g.migrate_repeat("L1", "손톱 깎기", "weekly", "me", TODAY)
+r2 = g.migrate_repeat("L1", "손톱 깎기", "weekly", "me", TODAY)  # 다시 보내기·다른 PC(같은 목록·제목 = 같은 id)
+ids = [kw["body"].get("id") for kw in svc.calls("events.insert")]
+check("5 (Review 3) 이미 옮겼으면(같은 id로 409) 다시 만들지 않고 할 일만 지움",
+      (r1, r2) == ("created", "exists") and len(ids) == 2 and ids[0] == ids[1] and len(svc.inserted) == 1
+      and deleted(svc) == ["new_task_id", "new_task_id"], (r1, r2, ids, deleted(svc)))
 
 pump(lambda: len(a.outbox) == 0)
 a.cfg["task_repeats"] = {"L1|손톱 깎기": "weekly", "L1|월세 납부일": "monthly"}
@@ -535,5 +548,68 @@ bk = SP / "old_backup.json"
 bk.write_text(json.dumps({"task_repeats": {"L1|손톱 깎기": "weekly"}}, ensure_ascii=False), "utf-8")
 a.import_settings_file(str(bk))
 check("5 예전 백업을 가져와도 반복 기억은 들어오지 않음(이미 옮긴 반복을 또 옮기지 않게)", a.cfg["task_repeats"] == {})
+
+# ================================================================ 전체 검토에서 고친 것
+# ---------- F1: 말일로 당겨진 회차를 옮겨도 원래 날짜(29~31일)를 지킴 ----------
+g, svc = mig([task_item("oct", date(2026, 10, 31), done=True), task_item("nov", date(2026, 11, 30))])
+g.migrate_repeat("L1", "손톱 깎기", "monthly", "me", date(2026, 11, 20))
+b = svc.calls("events.insert")[0]["body"]
+check("F1 11/30(31일이 당겨진 회차)부터 옮겨도 31일 규칙(짧은 달은 말일)",
+      b["start"] == {"date": "2026-11-30"} and b["recurrence"] == ["RRULE:FREQ=MONTHLY;BYMONTHDAY=28,29,30,31;BYSETPOS=-1"], b)
+g, svc = mig([task_item("jan", date(2027, 1, 31), done=True), task_item("feb", date(2027, 2, 28), done=True)])
+g.migrate_repeat("L1", "손톱 깎기", "monthly", "me", date(2027, 3, 10))
+b = svc.calls("events.insert")[0]["body"]
+check("F1 최신이 완료된 2/28이면 다음 회차는 3/31", b["start"] == {"date": "2027-03-31"}
+      and b["recurrence"] == ["RRULE:FREQ=MONTHLY;BYMONTHDAY=28,29,30,31;BYSETPOS=-1"], b)
+g, svc = mig([task_item("jan", date(2027, 1, 28), done=True), task_item("feb", date(2027, 2, 28))])
+g.migrate_repeat("L1", "손톱 깎기", "monthly", "me", date(2027, 2, 20))
+b = svc.calls("events.insert")[0]["body"]
+check("F1 정말 28일인 할 일은 28일 그대로", b["recurrence"] == ["RRULE:FREQ=MONTHLY;BYMONTHDAY=28"], b)
+
+# ---------- F2: 옮겼는지는 제목이 아니라 목록·제목으로 정한 id로 판단 ----------
+g, svc = mig([], series=True)  # 같은 제목의 다른 반복 할 일이 이미 있어도
+svc.task_items = lambda kw: [task_item("t-" + kw["tasklist"], FRI)]
+rs = [g.migrate_repeat("L1", "손톱 깎기", "weekly", "me", TODAY), g.migrate_repeat("L2", "손톱 깎기", "daily", "me", TODAY)]
+ids = [kw["body"].get("id") for kw in svc.calls("events.insert")]
+check("F2 다른 목록의 같은 제목·같은 제목의 다른 반복 할 일과 헷갈리지 않음(둘 다 만들고 각자 할 일만 지움)",
+      rs == ["created", "created"] and len(set(ids)) == 2 and deleted(svc) == ["t-L1", "t-L2"], (rs, ids, deleted(svc)))
+
+# ---------- F3: 완료와 다른 것을 함께 바꿔도 완료는 그 회차만 ----------
+inst = todo_ev("rt_20270122", FRI + timedelta(days=7))
+g, svc = fresh()
+svc.master["extendedProperties"] = {"private": {"xeticalTodo": "1"}}
+svc.instances = lambda kw: ([] if kw["eventId"] == "rt" else
+                            [{"id": kw["eventId"] + "_a", "originalStartTime": {"date": "2027-01-22"}},
+                             {"id": kw["eventId"] + "_b", "originalStartTime": {"date": "2027-01-29"}}])
+v3 = dict(inst.values(), title="발톱 깎기", end=inst.start, done=False, done_here=True, event_id="nid")
+g.update_event(inst, v3, "following")
+new_body = svc.calls("events.insert")[0]["body"]
+marks = {kw["eventId"]: private(kw["body"]).get("xeticalDone") for kw in svc.calls("events.patch") if "_" in kw["eventId"]}
+check("F3 '이번 및 이후': 새 반복은 완료가 아니고, 연 회차만 완료", private(new_body).get("xeticalDone") == ""
+      and marks == {"nid_a": "1"}, (private(new_body), marks))
+g, svc = fresh()
+svc.master["extendedProperties"] = {"private": {"xeticalTodo": "1"}}
+svc.instances = lambda kw: [{"id": "rt_a", "originalStartTime": {"date": "2027-01-22"}}]
+g.update_event(inst, dict(v3), "all")
+patches = {kw["eventId"]: private(kw["body"]).get("xeticalDone") for kw in svc.calls("events.patch")}
+check("F3 '모든 회차': 원본은 완료가 아니고, 연 회차만 완료", patches == {"rt": "", "rt_a": "1"}, patches)
+answer[0] = "following"
+ev, dlg = opened(ev=todo_ev("rt_20270122", FRI + timedelta(days=7)))
+dlg.title.setText("발톱 깎기")
+dlg.done_box.setChecked(True)
+save(dlg)
+u = jobs_named("update_event")[-1]
+check("F3 창에서 제목과 완료를 함께 바꾸면 완료는 그 회차 표시로만 보냄",
+      u[1]["done"] is False and u[1]["done_here"] is True and u[2] == "following", u[1:])
+
+# ---------- F4: '이번만' 고친 것은 되돌릴 수 있음 ----------
+answer[0] = "one"
+ev, dlg = opened()
+dlg.title.setText("발톱 깎기")
+save(dlg)
+job = a.undo_stack[-1]["jobs"][0]
+check("F4 '이번만' 고치기의 되돌리기는 그 회차를 원래대로", a.undo_stack[-1]["label"] == "반복 할 일 수정"
+      and job[0] == "update_event" and job[1][0].title == "발톱 깎기" and job[1][1]["title"] == "손톱 깎기"
+      and job[1][2] == "one" and job[1][0].todo, job)
 
 print(f"\n{sum(ok for _, ok in results)}/{len(results)} 통과")

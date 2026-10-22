@@ -273,8 +273,6 @@ try:
       feb = items[0].get("extendedProperties", {}).get("private", {}) if items else {}
       check("반복 할 일: ☐는 그 회차만 완료(할 일 표시는 그대로)", done_now is not None and done_now.done and done_now.todo
             and feb.get("xeticalDone") != "1", (done_now, feb))
-      check("반복 할 일: 이미 있는 반복 할 일 찾기(옮기기에서 두 벌 방지)",
-            g.find_todo_series(CAL, f"{P} 반복 할 일 31일") and not g.find_todo_series(CAL, f"{P} 없는 할 일"))
       for x in (mid, yid):
           svc.events().delete(calendarId=CAL, eventId=x).execute()
 
