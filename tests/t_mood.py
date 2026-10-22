@@ -190,6 +190,8 @@ import xetical.settings as ST
 ST.QInputDialog.getText = staticmethod(lambda *a_, **k: ("물 마시기", True))
 ed._add()
 check("설정: 트래커 추가", [t["name"] for t in a.cfg["mood_trackers"]][-1] == "물 마시기")
+check("설정: 새 트래커에 바꾼 시각을 찍음(동기화에서 트래커마다 나중 것)", a.cfg["mood_trackers"][-1].get("t", 0) > 0
+      and "t" not in a.cfg["mood_trackers"][0])
 new_id = a.cfg["mood_trackers"][-1]["id"]
 ed._add_color()
 ed._edit_color(1, label="2L 이상")
@@ -200,6 +202,19 @@ ed.list.setCurrentRow(len(a.cfg["mood_trackers"]) - 1)
 ed._remove()
 check("설정: 트래커 삭제 + 칠한 기록도 지움", new_id not in [t["id"] for t in a.cfg["mood_trackers"]]
       and new_id not in a.moods.days)
+check("설정: 지운 트래커는 지운 목록에(다른 PC에도 지우려고)", new_id in a.cfg["mood_deleted"])
+saved_trackers = a.cfg["mood_trackers"]
+a.cfg["mood_trackers"] = saved_trackers[:1]  # 설정 창이 열린 채로 동기화가 목록을 줄임
+ed.list.setCurrentRow(1)
+try:
+    ed._add_color()
+    ed._edit_color(0, label="x")
+    ed._remove_color(0)
+    check("설정: 화면과 목록이 어긋나도 엉뚱한 트래커를 고치거나 멈추지 않음", a.cfg["mood_trackers"] == saved_trackers[:1])
+except IndexError as e:
+    check("설정: 화면과 목록이 어긋나도 엉뚱한 트래커를 고치거나 멈추지 않음", False, e)
+a.cfg["mood_trackers"] = saved_trackers
+ed._fill()
 s.close()
 
 # ---------- 백업 ----------
@@ -211,6 +226,8 @@ check("설정 백업에 트래커 목록과 칠한 날", "mood_trackers" in save
 a.set_mood(T, "")
 a.import_settings_file(str(path))
 check("백업 가져오기로 칠한 날 복원", a.moods.get("mood", T) == "#ffc000")
+check("백업 가져오기: 트래커를 지금 바꾼 것으로 찍음(드라이브 목록에 져서 사라지지 않게)",
+      all(t.get("t", 0) > 0 for t in a.cfg["mood_trackers"]))
 
 # ================================================================ 구글 드라이브 동기화
 # ---------- 저장 모양 ----------
@@ -224,18 +241,32 @@ check("지운 날은 '빈 색 + 시각'으로 남김(다른 PC에 지웠다고 �
 
 # ---------- 합치기 규칙 ----------
 TR_A = [{"id": "mood", "name": "기분", "colors": []}]
-TR_B = [{"id": "mood", "name": "기분", "colors": []}, {"id": "run", "name": "달리기", "colors": []}]
-local = {"trackers": TR_A, "trackers_t": 10.0, "days": {"mood": {"2026-03-01": ["#red", 5.0], "2026-03-02": ["#a", 9.0]}}}
-remote = {"trackers": TR_B, "trackers_t": 20.0,
+TR_B = [{"id": "mood", "name": "기분", "colors": []}, {"id": "run", "name": "달리기", "colors": [], "t": 20.0}]
+local = {"trackers": TR_A, "deleted": {}, "days": {"mood": {"2026-03-01": ["#red", 5.0], "2026-03-02": ["#a", 9.0]}}}
+remote = {"trackers": TR_B, "deleted": {},
           "days": {"mood": {"2026-03-01": ["", 7.0], "2026-03-02": ["#b", 3.0], "2026-03-03": ["#c", 1.0]},
                    "run": {"2026-03-01": ["#g", 2.0]}}}
 m = MD.merge_sync(local, remote)
 check("합치기: 날짜마다 나중에 바꾼 쪽(지운 것도 이김)", m["days"]["mood"] == {
     "2026-03-01": ["", 7.0], "2026-03-02": ["#a", 9.0], "2026-03-03": ["#c", 1.0]}, m["days"])
-check("합치기: 트래커 목록은 나중에 바꾼 쪽", m["trackers"] == TR_B and m["trackers_t"] == 20.0 and "run" in m["days"])
-m2 = MD.merge_sync({"trackers": TR_B, "trackers_t": 30.0, "days": {}}, {"trackers": TR_A, "trackers_t": 20.0,
-                                                                     "days": {"gone": {"2026-03-01": ["#x", 1.0]}}})
-check("합치기: 지운 트래커의 칠한 날은 버림", "gone" not in m2["days"] and m2["trackers"] == TR_B)
+check("합치기: 다른 PC에서 만든 트래커를 받아 옴", m["trackers"] == TR_B and "run" in m["days"])
+m2 = MD.merge_sync({"trackers": TR_B, "deleted": {"gone": 5.0}, "days": {}},
+                   {"trackers": TR_A + [{"id": "gone", "name": "x", "colors": [], "t": 1.0}], "deleted": {},
+                    "days": {"gone": {"2026-03-01": ["#x", 1.0]}}})
+check("합치기: 지운 트래커는 빼고 칠한 날도 버림", "gone" not in m2["days"] and m2["trackers"] == TR_B
+      and m2["deleted"] == {"gone": 5.0})
+# 한쪽은 색 이름을 바꾸고 다른 쪽은 트래커를 새로 만듦: 둘 다 남아야 한다(예전엔 목록이 통째로 이겨 새 트래커가 사라졌다)
+pc_a = {"trackers": [{"id": "mood", "name": "기분", "colors": [{"color": "#1", "label": "새 이름"}], "t": 200.0}],
+        "deleted": {}, "days": {}}
+pc_b = {"trackers": [{"id": "mood", "name": "기분", "colors": [{"color": "#1", "label": "옛 이름"}]},
+                     {"id": "water", "name": "물", "colors": [], "t": 100.0}],
+        "deleted": {}, "days": {"water": {"2026-03-01": ["#00b050", 100.0]}}}
+m3 = MD.merge_sync(pc_a, pc_b)
+check("합치기: 트래커마다 나중 것(다른 PC에서 새로 만든 트래커와 기록이 남음)",
+      [t["id"] for t in m3["trackers"]] == ["mood", "water"] and m3["trackers"][0]["colors"][0]["label"] == "새 이름"
+      and "water" in m3["days"], m3)
+m4 = MD.merge_sync(pc_b, {"trackers": [], "deleted": {"water": 50.0}, "days": {}})
+check("합치기: 지운 뒤에 다시 고친 트래커는 남음", "water" in [t["id"] for t in m4["trackers"]])
 check("합치기: 드라이브에 아직 없으면 이 PC 것 그대로", MD.merge_sync(local, None)["days"] == local["days"])
 
 
@@ -285,7 +316,7 @@ g._drive = lambda: drive
 first = g.mood_sync(local)
 check("드라이브: 처음이면 앱 전용 폴더에 파일을 만들어 올림", "f1" in drive.store
       and json.loads(drive.store["f1"])["days"] == local["days"])
-other_pc = {"trackers": TR_A, "trackers_t": 10.0, "days": {"mood": {"2026-03-05": ["#z", 50.0]}}}
+other_pc = {"trackers": TR_A, "deleted": {}, "days": {"mood": {"2026-03-05": ["#z", 50.0]}}}
 merged = g.mood_sync(other_pc)
 check("드라이브: 다른 PC가 받으면 둘이 합쳐짐", merged["days"]["mood"].keys() >= {"2026-03-01", "2026-03-05"}
       and json.loads(drive.store["f1"])["days"]["mood"]["2026-03-05"] == ["#z", 50.0])
@@ -312,10 +343,9 @@ a.set_status("")
 a.sync_moods()
 check("드라이브 권한이 없으면 '다시 로그인' 안내", "다시 로그인" in w.status and w.status_clickable, w.status)
 sg.scope = True
-a.cfg["mood_trackers_t"] = 1.0
 sg.remote = {"trackers": [{"id": "mood", "name": "기분", "colors": [{"color": "#00b050", "label": "좋음"}]},
                           {"id": "sleep", "name": "잠", "colors": [{"color": "#7030a0", "label": "푹 잠"}]}],
-             "trackers_t": 99.0, "days": {"sleep": {T.isoformat(): ["#7030a0", 1e12]}}}
+             "deleted": {"workout": 1e12}, "days": {"sleep": {T.isoformat(): ["#7030a0", 1e12]}}}
 import time as _time
 a.sync_moods()
 end = _time.time() + 5
@@ -323,9 +353,42 @@ while a._mood_syncing and _time.time() < end:
     qapp.processEvents()
     _time.sleep(0.02)
 check("앱: 다른 PC에서 바꾼 트래커 목록을 받아 옴", [t["id"] for t in a.cfg["mood_trackers"]] == ["mood", "sleep"]
-      and a.cfg["mood_trackers_t"] == 99.0, a.cfg["mood_trackers"])
+      and "workout" in a.cfg["mood_deleted"], a.cfg["mood_trackers"])
 check("앱: 다른 PC에서 칠한 날을 받아 옴", a.moods.get("sleep", T) == "#7030a0")
-check("앱: 목록에서 빠진 트래커(운동)의 기록은 지움", "workout" not in a.moods.days)
+check("앱: 다른 PC에서 지운 트래커(운동)의 기록은 지움", "workout" not in a.moods.days)
+
+
+def wait_moods():
+    end = _time.time() + 5
+    while a._mood_syncing and _time.time() < end:
+        qapp.processEvents()
+        _time.sleep(0.02)
+
+
+# 동기화하는 사이 이 PC에서 트래커를 지움: 받아 온 내용(지우기 전 스냅숏)이 되살리면 안 된다
+sg.remote = None
+a.moods.set("sleep", T, "#7030a0")
+real_submit = a.worker.submit
+
+
+def submit_then_delete(fn, *args, callback):
+    def run():
+        res = fn(*args)
+        kept = [t for t in a.cfg["mood_trackers"] if t["id"] != "sleep"]
+        MD.stamp_trackers(a.cfg["mood_trackers"], kept, a.cfg["mood_deleted"])
+        a.cfg["mood_trackers"] = kept
+        a.moods.drop("sleep")
+        callback(res, None)
+    run()
+
+
+a.worker.submit = submit_then_delete
+a.sync_moods()
+a.worker.submit = real_submit
+check("동기화 중에 지운 트래커가 되살아나지 않음(목록·기록 모두)",
+      "sleep" not in [t["id"] for t in a.cfg["mood_trackers"]] and "sleep" not in a.moods.days, a.moods.days.keys())
+a.set_mood(T, "#00b050", tracker_id="sleep", record=False)
+check("지운 트래커에 칠하기(되돌리기)는 기록을 되살리지 않음", "sleep" not in a.moods.days)
 
 # 구글 저장 공간이 가득 참
 from googleapiclient.errors import HttpError
@@ -348,7 +411,12 @@ while a._mood_syncing and _time.time() < end:
     _time.sleep(0.02)
 check("구글 저장 공간이 가득 차면 위쪽에 안내 + 누르면 저장 공간 화면",
       "저장 공간이 가득" in w.status and w.status_clickable and a._fix_url == "https://one.google.com/storage", w.status)
-check("저장 공간이 가득 차도 이 PC 기록은 그대로", a.moods.get("sleep", T) == "#7030a0")
+check("저장 공간이 가득 차도 이 PC 기록은 그대로", a.moods.get("mood", T) == "#ffc000")
+sg.mood_sync = lambda loc: MD.merge_sync(loc, None)
+a.sync_moods()
+wait_moods()
+check("저장 공간 문제가 풀리면 안내와 해결 페이지를 지움(☁가 다시 동기화)", a._fix_url is None and not w.status_clickable,
+      (a._fix_url, w.status))
 
 a.shutdown()
 print(f"\n{sum(ok for _, ok in results)}/{len(results)} 통과")

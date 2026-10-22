@@ -172,12 +172,12 @@ try:
           import xetical.gcal as G
           real_name, G.MOODS_FILE = G.MOODS_FILE, "xetical-moods-test.json"  # 실제 트래커 파일은 건드리지 않는다
           try:
-              loc = {"trackers": [{"id": "t", "name": "시험", "colors": []}], "trackers_t": 1.0,
+              loc = {"trackers": [{"id": "t", "name": "시험", "colors": []}], "deleted": {},
                      "days": {"t": {"2027-01-11": ["#00b050", 1.0]}}}
               g.mood_sync(loc)
               fid, got = g.mood_download()
               check("트래커: 드라이브 앱 전용 폴더에 올리고 받기", got and got["days"] == loc["days"], got)
-              loc2 = {"trackers": loc["trackers"], "trackers_t": 1.0, "days": {"t": {"2027-01-12": ["#ff0000", 2.0]}}}
+              loc2 = {"trackers": loc["trackers"], "deleted": {}, "days": {"t": {"2027-01-12": ["#ff0000", 2.0]}}}
               merged = g.mood_sync(loc2)
               check("트래커: 다른 PC 내용과 합쳐짐", set(merged["days"]["t"]) == {"2027-01-11", "2027-01-12"}, merged)
           except HttpError as ex:  # 드라이브 문제(저장 공간 가득 등)로 나머지 시험까지 멈추지 않게

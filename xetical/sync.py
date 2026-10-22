@@ -8,6 +8,7 @@ from googleapiclient.errors import HttpError
 from PySide6.QtWidgets import QMessageBox
 
 from .gcal import ApiDisabledError, AuthError
+from .mood import merge_trackers
 
 log = logging.getLogger("xetical")
 FETCH_MARGIN = timedelta(days=42)
@@ -79,6 +80,7 @@ class SyncMixin:
             self.win.countdowns = nearest_countdowns(countdowns)
             self._last_sync = datetime.now()
             self.win.cloud_state = "ok"
+            self._fix_url = None  # 풀린 문제의 해결 페이지가 남아 ☁·상태 줄 클릭을 가로채지 않게
             self.set_status("")
             # 할 일은 캘린더와 따로 받는다. 문제가 있으면 알려 주되 캘린더 표시는 그대로 둔다.
             if tasks_status == "scope":
@@ -107,13 +109,14 @@ class SyncMixin:
         if not self.cfg["mood_sync"] or not self.gcal.has_token():
             return
         if not self.gcal.has_drive_scope():
-            self.set_status("트래커를 동기화하려면 다시 로그인 — 여기를 클릭", True)
+            if not self.win.status_clickable:  # 다른 해결 안내(API 꺼짐 등)를 덮으면 클릭이 엉뚱한 곳으로 간다
+                self.set_status("트래커를 동기화하려면 다시 로그인 — 여기를 클릭", True)
             return
         if self._mood_syncing:
             self._mood_again = True
             return
         self._mood_syncing = True
-        local = {"trackers": copy.deepcopy(self.cfg["mood_trackers"]), "trackers_t": self.cfg["mood_trackers_t"],
+        local = {"trackers": copy.deepcopy(self.cfg["mood_trackers"]), "deleted": dict(self.cfg["mood_deleted"]),
                  "days": copy.deepcopy(self.moods.days)}
         self.worker.submit(self.gcal.mood_sync, local, callback=self._on_moods_synced)
 
@@ -132,15 +135,25 @@ class SyncMixin:
             else:  # 인터넷 끊김 등: 다음 동기화 때 합쳐서 다시 올린다(잃는 것 없음)
                 log.warning("트래커 동기화 실패: %s", err)
         else:
-            if res["trackers_t"] > self.cfg["mood_trackers_t"]:  # 다른 PC에서 트래커 목록을 바꿨다
-                self.cfg["mood_trackers"], self.cfg["mood_trackers_t"] = res["trackers"], res["trackers_t"]
-                ids = [t["id"] for t in res["trackers"]]
+            if self._fix_url == STORAGE_URL:  # 저장 공간 문제가 풀렸다
+                self._fix_url = None
+                self.set_status("")
+            # 동기화하는 사이 이 PC에서 바꾼 트래커도 있을 수 있어서 지금 목록과 다시 합친다
+            trackers, deleted = merge_trackers(self.cfg["mood_trackers"], self.cfg["mood_deleted"],
+                                               res["trackers"], res["deleted"])
+            if trackers != self.cfg["mood_trackers"] or deleted != self.cfg["mood_deleted"]:
+                self.cfg["mood_trackers"], self.cfg["mood_deleted"] = trackers, deleted
+                ids = [t["id"] for t in trackers]
                 if self.cfg["mood_active"] not in ids and ids:
                     self.cfg["mood_active"] = ids[0]
                 self.cfg.save()
-                for tracker_id in [t for t in self.moods.days if t not in ids]:
-                    self.moods.drop(tracker_id)
+                editor = getattr(self._settings, "tracker_editor", None)
+                if editor is not None:
+                    editor._fill()  # 열려 있는 설정 창 목록도 새로(화면과 다른 트래커를 고치지 않게)
             self.moods.merge(res["days"])  # 동기화하는 사이 이 PC에서 칠한 것은 시각이 더 나중이라 남는다
+            ids = {t["id"] for t in self.cfg["mood_trackers"]}
+            for tracker_id in [t for t in self.moods.days if t not in ids]:  # 지운 트래커의 기록
+                self.moods.drop(tracker_id)
             self.win.update()
         if self._mood_again:
             self._mood_again = False

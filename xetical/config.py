@@ -28,7 +28,7 @@ CLIENT_SECRET_PATH = DATA_DIR / "client_secret.json"
 TOKEN_PATH = DATA_DIR / "token.json"
 CACHE_PATH = DATA_DIR / "cache.json"
 CELLS_PATH = DATA_DIR / "cells.json"      # 날짜별 셀 배경색
-MOODS_PATH = DATA_DIR / "moods.json"      # 트래커: 트래커 id -> {날짜: 색}
+MOODS_PATH = DATA_DIR / "moods.json"      # 트래커: 트래커 id -> {날짜: [색, 바꾼 시각]}
 FIRED_PATH = DATA_DIR / "fired.json"      # 이미 띄운 알림
 OUTBOX_PATH = DATA_DIR / "outbox.json"    # 아직 구글에 못 보낸 변경(오프라인 대기)
 LOCK_PATH = DATA_DIR / "xetical.lock"
@@ -38,7 +38,7 @@ README_PATH = BASE_DIR / "README.md"
 APP_VERSION = "1.2.1"
 
 # 설정 백업에서 빼는 항목(이 PC에만 의미가 있는 값)
-LOCAL_ONLY_KEYS = {"geometry", "card_positions", "summary_last", "editor_size"}
+LOCAL_ONLY_KEYS = {"geometry", "card_positions", "summary_last", "editor_size", "mood_deleted"}
 
 DEFAULTS = {
     # ── 캘린더 ──
@@ -132,7 +132,7 @@ DEFAULTS = {
     "summary_time": "08:30",
     "summary_last": "",            # 마지막으로 요약을 띄운 날짜
     "custom_themes": {},           # 내 테마 {이름: {설정…}}
-    # 트래커(무드 트래커 등): 달력 아래 올해 365칸에 날마다 색을 칠한다. 구글과 동기화하지 않는다.
+    # 트래커(무드 트래커 등): 달력 아래 올해 365칸에 날마다 색을 칠한다. 켜면 구글 드라이브로 PC끼리 맞춘다.
     "mood_on": False,
     "mood_layout": "week",         # week = 7줄×53열, month = 12줄(월)×31칸
     "mood_week_from": "jan1",      # 주 단위 배치: jan1 = 1월 1일부터 왼쪽 위에서 차례로, weekday = 줄이 요일
@@ -143,12 +143,12 @@ DEFAULTS = {
         {"id": "workout", "name": "운동", "colors": [{"color": "#0070c0", "label": "운동함"}]},
     ],
     "mood_active": "mood",         # 지금 보이는 트래커 id
-    "mood_trackers_t": 0.0,        # 트래커 목록을 마지막으로 바꾼 시각(드라이브 동기화에서 나중 것을 고른다)
+    "mood_deleted": {},            # 지운 트래커 id -> 지운 시각(드라이브 동기화로 다른 PC에도 지운다)
     "mood_sync": False,            # 구글 드라이브 앱 전용 폴더로 트래커 동기화
 }
 
 # 예전 버전 설정 이름 → 새 이름
-_LEGACY = {"font_family": None, "font_size": None, "opacity": None}
+_LEGACY = {"font_family": None, "font_size": None, "opacity": None, "mood_trackers_t": None}
 
 
 class Config(dict):

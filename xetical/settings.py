@@ -2,7 +2,6 @@
 바꾸는 즉시 적용되고 저장된다(DesktopCal과 같다)."""
 import copy
 import os
-import time
 import uuid
 
 from PySide6.QtCore import Qt, QTime, QTimer
@@ -16,6 +15,7 @@ from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFileDialog, 
 from . import config
 from .dialogs import color_icon
 from .gcal import HOLIDAY_REGIONS, is_holiday_calendar
+from .mood import stamp_trackers
 from .widgets import SOUNDS, ColorButton, OnOff, is_dark, play_sound
 
 _STYLE = """
@@ -129,7 +129,7 @@ class TrackerEditor(QWidget):
         return copy.deepcopy(self.cfg["mood_trackers"])
 
     def _save(self, trackers, select=None):
-        self.cfg["mood_trackers_t"] = time.time()  # 드라이브 동기화에서 나중에 바꾼 목록을 고르는 데 쓴다
+        stamp_trackers(self.cfg["mood_trackers"], trackers, self.cfg["mood_deleted"])  # 드라이브 동기화에서 나중 것을 고른다
         self.win.set("mood_trackers", trackers)
         if not any(t["id"] == self.cfg["mood_active"] for t in trackers) and trackers:
             self.win.set("mood_active", trackers[0]["id"])
@@ -205,15 +205,25 @@ class TrackerEditor(QWidget):
         self.win.app.moods.drop(t["id"])
         self._save(trackers, max(0, i - 1))
 
-    def _add_color(self):
+    def _current(self, k=None):
+        """(i, 트래커 목록 사본) — 고른 줄(과 색 k)이 없으면 None(동기화로 목록이 바뀐 직후 등)"""
         i = self.list.currentRow()
         trackers = self.trackers()
+        if not 0 <= i < len(trackers) or (k is not None and not 0 <= k < len(trackers[i]["colors"])):
+            return None
+        return i, trackers
+
+    def _add_color(self):
+        if (cur := self._current()) is None:
+            return
+        i, trackers = cur
         trackers[i]["colors"].append({"color": "#0070c0", "label": ""})
         self._save(trackers, i)
 
     def _edit_color(self, k, color=None, label=None):
-        i = self.list.currentRow()
-        trackers = self.trackers()
+        if (cur := self._current(k)) is None:
+            return
+        i, trackers = cur
         c = trackers[i]["colors"][k]
         if color is not None:
             c["color"] = color or c["color"]
@@ -224,8 +234,9 @@ class TrackerEditor(QWidget):
         self._save(trackers, i)
 
     def _remove_color(self, k):
-        i = self.list.currentRow()
-        trackers = self.trackers()
+        if (cur := self._current(k)) is None:
+            return
+        i, trackers = cur
         if len(trackers[i]["colors"]) > 1:
             del trackers[i]["colors"][k]
             self._save(trackers, i)
@@ -589,8 +600,8 @@ class SettingsWindow(QWidget):
         p = Page()
         p.section("트래커")
         p.row("달력 아래 트래커 표시", self.onoff("mood_on"),
-              hint="올해 365일을 칸으로 보여 줍니다. 오늘과 지난 날 칸을 눌러 색을 칠합니다(기분, 운동 여부 등). "
-                   "구글과 동기화하지 않고 이 PC에만 저장합니다.")
+              hint="올해 365일을 칸으로 보여 줍니다. 오늘과 지난 날 칸을 더블클릭(또는 오른쪽 클릭)해 색을 칠합니다"
+                   "(기분, 운동 여부 등). 기록은 이 PC에 저장합니다.")
         p.row("모양", self.combo("mood_layout", [("week", "주 단위 (7줄 × 53주)"), ("month", "월 단위 (12줄 × 31일)")]))
         p.row("1월 1일 위치 (주 단위)", self.combo("mood_week_from", [("jan1", "왼쪽 위부터 차례로"),
                                                                 ("weekday", "요일 줄에 맞춤")]),
@@ -599,7 +610,8 @@ class SettingsWindow(QWidget):
               hint="같은 구글 계정을 쓰는 PC끼리 트래커를 맞춥니다. 드라이브의 앱 전용 숨은 폴더에만 저장되고 "
                    "드라이브 목록에는 보이지 않습니다. 처음 켜면 한 번 다시 로그인해야 합니다.")
         p.section("트래커와 색")
-        p.widget_row(TrackerEditor(self))
+        self.tracker_editor = TrackerEditor(self)
+        p.widget_row(self.tracker_editor)
         return p
 
     # ---------- 계정(Xetical) ----------

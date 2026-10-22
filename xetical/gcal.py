@@ -228,11 +228,11 @@ class GCal:
         """(파일 id, 내용 dict) — 아직 없으면 (None, None)"""
         svc = self._drive()
         r = self._call(svc.files().list(spaces="appDataFolder", q=f"name = '{MOODS_FILE}'", fields="files(id)",
-                                        pageSize=10))
+                                        orderBy="createdTime", pageSize=10))
         files = r.get("files", [])
         if not files:
             return None, None
-        file_id = files[0]["id"]
+        file_id = files[0]["id"]  # 두 PC가 처음에 동시에 만들어 파일이 둘이어도 모두 먼저 만든 파일을 쓴다
         body = self._call(svc.files().get_media(fileId=file_id))
         try:
             data = json.loads(body.decode("utf-8") if isinstance(body, bytes) else body)

@@ -6,6 +6,7 @@ import logging
 import os
 import shutil
 import sys
+import time
 import webbrowser
 import winreg
 from concurrent.futures import ThreadPoolExecutor
@@ -519,6 +520,8 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
 
     def set_mood(self, d, color, tracker_id=None, record=True):
         tracker_id = tracker_id or active_tracker(self.cfg)["id"]
+        if not any(t["id"] == tracker_id for t in self.cfg["mood_trackers"]):
+            return  # 그사이 지운 트래커(되돌리기): 기록을 되살리지 않는다
         old = self.moods.get(tracker_id, d)
         self.moods.set(tracker_id, d, color)
         if self.cfg["mood_sync"]:
@@ -585,6 +588,10 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
         colors = data.pop("cell_colors", None)
         moods = data.pop("moods", None)
         values = {k: v for k, v in data.items() if k in DEFAULTS and k not in LOCAL_ONLY_KEYS}
+        if isinstance(values.get("mood_trackers"), list):
+            # 가져온 트래커는 지금 바꾼 것으로 찍는다(아니면 드라이브의 더 나중 목록에 져서 다시 사라진다)
+            values["mood_trackers"] = [dict(t, t=time.time()) for t in values["mood_trackers"]
+                                       if isinstance(t, dict) and "id" in t]
         self.import_settings(values)
         if isinstance(colors, dict):
             self.import_cell_colors(colors)
