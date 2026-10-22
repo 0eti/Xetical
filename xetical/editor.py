@@ -151,7 +151,7 @@ class CellEditor(QWidget):
         self.setGeometry(QRect(x, y, w, h))
 
     def _item_label(self, ev):
-        if ev.task_list:
+        if ev.task_list or ev.todo:
             return ("☑ " if ev.done else "☐ ") + ev.title + (" (예정)" if ev.virtual else "")
         icons = ("↻" if ev.recurring else "") + ("⏰" if ev.alarm else "") + ("⏳" if ev.countdown else "")
         if ev.all_day:

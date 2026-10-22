@@ -273,7 +273,7 @@ class CalendarWindow(QWidget):
 
     def _shown(self, ev):
         c = self.cfg
-        if ev.task_list:
+        if ev.task_list or ev.todo:  # 반복 할 일도 할 일 설정을 따른다
             if not c["show_tasks"] or (ev.virtual and not c["show_task_projection"]):
                 return False
             if ev.done and not c["show_done_tasks"]:
@@ -597,7 +597,7 @@ class CalendarWindow(QWidget):
     def item_text(self, ev, d):
         cfg = self.cfg
         text = ev.title
-        if ev.task_list:
+        if ev.task_list or ev.todo:
             return ("☑ " if ev.done else "☐ ") + text
         if ev.response in INVITE_MARK:
             text = INVITE_MARK[ev.response] + text
@@ -671,7 +671,7 @@ class CalendarWindow(QWidget):
                 p.drawText(tr, flags, text)
                 p.setOpacity(base_opacity)
                 self._event_hits.append((vis.intersected(area), ev))
-                if ev.task_list:  # ☐ 누르는 자리(1-1). 예정(virtual)을 누르면 지금 차례 할 일이 완료된다
+                if ev.task_list or ev.todo:  # ☐ 누르는 자리(1-1). 예정(virtual)을 누르면 지금 차례 할 일이 완료된다
                     cx = area.left() + bar + fm.horizontalAdvance(prefix)
                     self._check_hits.append((QRectF(cx - 2, ey, fm.horizontalAdvance("☐ ") + 4, lh), ev))
             ey += h + gap
@@ -1108,7 +1108,7 @@ def tooltip_text(ev, store, cfg=None):
         return fmt_time(dt, cfg) if cfg else f"{dt:%H:%M}"
     if ev.virtual:
         when = f"{ev.start:%m/%d} 예정 · 반복 할 일"
-    elif ev.task_list:
+    elif ev.task_list or ev.todo:
         when = f"{ev.start:%m/%d} 마감 · {'완료한 할 일' if ev.done else '할 일'}"
     elif ev.all_day:
         last = ev.end - timedelta(days=1)
@@ -1123,7 +1123,7 @@ def tooltip_text(ev, store, cfg=None):
         state = {"needsAction": "응답 필요", "accepted": "참석", "tentative": "미정", "declined": "거절"}
         lines.append(f"✉ 초대 · {state.get(ev.response, ev.response)}" + (f" · 주최: {_esc(ev.organizer)}" if ev.organizer else ""))
     if ev.recurring:
-        lines.append("↻ 반복 일정")
+        lines.append("↻ 반복 할 일" if ev.todo else "↻ 반복 일정")
     a = ev.alarm_parts()
     if a:
         adv = ", ".join("당일" if x == 0 else f"{x}일 전" for x in a[2])

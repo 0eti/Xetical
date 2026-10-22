@@ -751,12 +751,16 @@ class GCal:
             self._call(svc.events().delete(calendarId=ev.calendar_id, eventId=ev.id))
 
     def set_props(self, ev, **props):
-        """완료·글자색 같은 DesktopCal식 속성만 바꾼다. 앱은 쓰지 않고 실제 구글 시험(t_google)이 회차를 표시할 때 쓴다."""
+        """완료·글자색 같은 DesktopCal식 속성만 바꾼다(반복 일정이면 그 회차만)."""
         cur = {"done": ev.done, "text_color": ev.text_color, "order": ev.order, "line": ev.line,
                "alarm": ev.alarm, "countdown": ev.countdown, "todo": ev.todo}
         cur.update(props)
         self._call(self._service().events().patch(
             calendarId=ev.calendar_id, eventId=ev.id, body={"extendedProperties": {"private": event_props(cur)}}))
+
+    def set_event_done(self, ev, done):
+        """반복 할 일 한 회차의 ☐(완료 표시)만 바꾼다."""
+        self.set_props(ev, done=done)
 
     def apply_ops(self, ops):
         """셀 편집기 저장 결과를 한 번에 반영. ops = [(kind, ...)]"""

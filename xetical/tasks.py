@@ -26,7 +26,9 @@ class TaskMixin:
         if ev.virtual:
             return self._complete_projection(ev)
         if ev.id.startswith("tmp-"):
-            return
+            return  # 아직 구글에 올라가는 중
+        if ev.todo:
+            return self._toggle_todo(ev)
         old = ev.done
         ev.done = not old
         jobs = [("set_task_done", [ev, old], [])]
@@ -35,6 +37,17 @@ class TaskMixin:
             play_sound(self.cfg["done_sound"])
             jobs += self._create_next_occurrence(ev)
         self.push_undo("할 일 완료" if ev.done else "할 일 미완료", jobs)
+        self._after_task_change()
+
+    def _toggle_todo(self, ev):
+        """반복 할 일의 ☐: 그 회차만 완료/미완료(범위를 묻지 않는다). 구글에는 그 회차의 완료 표시만 고친다."""
+        old = ev.done
+        ev.done = not old
+        label = "할 일 완료" if ev.done else "할 일 미완료"
+        self.outbox.add("set_event_done", ev, ev.done, label=label)
+        if ev.done:
+            play_sound(self.cfg["done_sound"])
+        self.push_undo(label, [("set_event_done", [ev, old], [])])
         self._after_task_change()
 
     def _task_rule(self, ev):

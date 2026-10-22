@@ -309,7 +309,7 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
         m = QMenu()
         real = self._real(ev)
         self._add(m, "편집…", lambda: self.edit_event(ev))
-        if ev.task_list and real:
+        if (ev.task_list or ev.todo) and real:
             self._add(m, "미완료로 표시" if real.done else "완료로 표시", lambda: self.toggle_task(real))
         self._add(m, "복사", self.copy_selected, enabled=not ev.virtual)
         self._add(m, "잘라내기", self.cut_selected, enabled=not ev.virtual and (ev.writable or bool(ev.task_list)))

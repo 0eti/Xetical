@@ -256,4 +256,110 @@ check("2 바꾼 할 일은 화면에서도 바로 빠짐", gone)
 check("2 되돌리기: 반복 일정 지우고 할 일 되살리기",
       [j[0] for j in a.undo_stack[-1]["jobs"]] == ["delete_event", "create_task"], a.undo_stack[-1]["jobs"])
 
+# ---------- 3: 칸에 ☐로 보이고 눌러서 그 회차 완료 ----------
+from PySide6.QtCore import QRect
+from PySide6.QtWidgets import QPushButton
+from xetical.view import tooltip_text
+
+pump(lambda: len(a.outbox) == 0)
+
+
+def todo_ev(eid, d, title="손톱 깎기", **kw):
+    return Event(eid, "me", title, d, d + timedelta(days=1), True, recurring=True, recurring_event_id=eid.split("_")[0],
+                 todo=True, **kw)
+
+
+todo = todo_ev("rt_20270115", FRI)
+plain_rec = Event("rm_20270115", "me", "주간 회의", FRI, FRI + timedelta(days=1), True, recurring=True,
+                  recurring_event_id="rm")
+a.store.set(CALS, [todo, plain_rec], {}, RANGE)
+check("3 칸 글자: 반복 할 일만 ☐", w.item_text(todo, FRI) == "☐ 손톱 깎기" and w.item_text(plain_rec, FRI) == "주간 회의")
+w.go_to(FRI)
+w.grab()
+check("3 (Review 4) ☐ 누르는 자리는 반복 할 일에만",
+      any(ev is todo for _r, ev in w._check_hits) and not any(ev is plain_rec for _r, ev in w._check_hits))
+tip = tooltip_text(todo, a.store, a.cfg)
+check("3 풍선 도움말", "↻ 반복 할 일" in tip and "01/15 마감 · 할 일" in tip, tip)
+check("3 보통 반복 일정 풍선 도움말은 그대로", "↻ 반복 일정" in tooltip_text(plain_rec, a.store, a.cfg))
+
+n = len(fake.calls)
+a.toggle_task(todo)
+done_jobs = jobs_named("set_event_done")
+check("3 ☐ 누르면 그 회차만 완료", todo.done and done_jobs and done_jobs[-1][0].id == "rt_20270115"
+      and done_jobs[-1][1] is True, done_jobs)
+check("3 되돌리기", a.undo_stack[-1]["jobs"][0][0] == "set_event_done" and a.undo_stack[-1]["jobs"][0][1][1] is False)
+check("3 칸 글자: 완료면 ☑", w.item_text(todo, FRI) == "☑ 손톱 깎기")
+g, svc = fresh()
+g.set_event_done(todo, True)
+p = private(svc.calls("events.patch")[0]["body"])
+check("3 구글에는 그 회차 완료 + 할 일 표시 유지", svc.calls("events.patch")[0]["eventId"] == "rt_20270115"
+      and p.get("xeticalDone") == "1" and p.get("xeticalTodo") == "1", p)
+tmp_todo = todo_ev("tmp-abc_20270122", FRI + timedelta(days=7))
+n = len(a.outbox.jobs) + len(fake.calls)
+a.toggle_task(tmp_todo)
+check("3 (Review 1) 동기화 전 회차의 ☐는 무시", not tmp_todo.done and len(a.outbox.jobs) + len(fake.calls) == n)
+
+a.cfg["show_done_tasks"] = False
+check("3 (Review 5) 완료한 할 일 표시를 끄면 완료 회차가 숨음", todo not in w.cell_events(FRI))
+a.cfg["show_done_tasks"] = True
+todo.done = False
+a.cfg["show_tasks"] = False
+check("3 (Review 5) 할 일 표시를 끄면 반복 할 일도 숨음(보통 반복 일정은 그대로)",
+      todo not in w.cell_events(FRI) and plain_rec in w.cell_events(FRI))
+a.cfg["show_tasks"] = True
+
+ed = __import__("xetical.editor", fromlist=["CellEditor"]).CellEditor(a.cfg, a.store, FRI, QRect(0, 0, 160, 120), "me", [])
+items = [b.text() for b in ed.findChildren(QPushButton) if b.objectName() == "item"]
+check("3 칸 편집기: 반복 할 일은 위쪽 목록에 ☐로(한 줄로 고치지 않음)",
+      items == ["☐ 손톱 깎기"] and ed.edit.toPlainText() == "주간 회의", (items, ed.edit.toPlainText()))
+ed.close()
+
+texts = []
+orig_add = a._add
+a._add = lambda m, text, fn, checked=None, enabled=True: (texts.append(text), orig_add(m, text, fn, checked, enabled))[1]
+real_menu = A.QMenu
+
+
+class NoExecMenu(real_menu):  # 메뉴를 띄우지 않고(시험이 멈추지 않게) 항목만 만든다
+    def exec(self, *args):
+        return None
+
+
+A.QMenu = NoExecMenu
+a.show_event_menu(todo, FRI, w.mapToGlobal(w.rect().center()))
+A.QMenu = real_menu
+check("3 오른쪽 클릭 메뉴에 완료 표시", "완료로 표시" in texts, texts)
+a._add = orig_add
+
+a.open_day_view(FRI)
+btn = next((b for b in a._dayview.findChildren(QPushButton) if b.text() == "☐ 손톱 깎기"), None)
+btn and btn.click()
+check("3 하루 상세 보기: 누르면 ☐가 바뀜", btn is not None and todo.done)
+a._dayview.close()
+pump(lambda: len(a.outbox) == 0)
+
+# 아침 요약: 오늘 회차는 할 일로, 지난 30일 안의 미완료 회차는 '(마감 지남)'으로
+T = date.today()
+a.store.set(CALS, [todo_ev("s1_a", T, "오늘 할 일"), todo_ev("s2_a", T - timedelta(days=10), "지난 할 일"),
+                   todo_ev("s3_a", T - timedelta(days=40), "오래된 할 일"),
+                   todo_ev("s4_a", T - timedelta(days=10), "끝낸 할 일", done=True),
+                   Event("rm_x", "me", "회의", T, T + timedelta(days=1), True, recurring=True, recurring_event_id="rm")],
+            {}, (T - timedelta(days=60), T + timedelta(days=90)))
+captured = []
+
+
+class _Popup:
+    def show(self):
+        pass
+
+
+R.SummaryPopup = lambda title, lines, on_open: (captured.append((title, [t for t, _c in lines])), _Popup())[1]
+a.reminders.check_summary(force=True)
+title, lines = captured[-1]
+past = T - timedelta(days=10)
+check("3 아침 요약: 오늘 회차는 할 일, 지난 30일 안 미완료는 마감 지남",
+      "☐ 오늘 할 일" in lines and f"☐ 지난 할 일  (마감 {past:%m/%d} 지남)" in lines
+      and not any("오래된" in t or "끝낸" in t for t in lines) and "할 일 2개" in title and "일정 1개" in title,
+      (title, lines))
+
 print(f"\n{sum(ok for _, ok in results)}/{len(results)} 통과")
