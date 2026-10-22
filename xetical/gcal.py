@@ -82,17 +82,32 @@ def _rfc3339(d):
     return datetime.combine(d, time.min).astimezone().isoformat()
 
 
+def _when(d):
+    """date(종일)·로컬 datetime → 구글 timeMin/timeMax 값."""
+    return d.astimezone().isoformat() if isinstance(d, datetime) else _rfc3339(d)
+
+
 def _rrule_line(recurrence):
     return next((r for r in recurrence or [] if r.upper().startswith("RRULE:")), "")
 
 
+def _original_start(item):
+    """구글 반복 회차의 원래 자리(originalStartTime). 종일이면 date, 아니면 로컬 datetime, 없으면 None."""
+    o = item.get("originalStartTime") or {}
+    if "date" in o:
+        return date.fromisoformat(o["date"])
+    if "dateTime" in o:
+        return _local(o["dateTime"])
+    return None
+
+
 def _is_first(ev, master):
-    """반복 일정의 첫 회차인가(원본의 시작과 같거나 앞)."""
-    ms = master.get("start", {})
+    """반복 일정의 첫 회차인가(원래 자리가 원본의 시작과 같거나 앞). 첫 회차를 뒤로 옮겼어도 첫 회차다."""
+    ms, slot = master.get("start", {}), ev.slot
     if "date" in ms:
-        return ev.all_day and ev.start <= date.fromisoformat(ms["date"])
+        return not isinstance(slot, datetime) and slot <= date.fromisoformat(ms["date"])
     if "dateTime" in ms:
-        return not ev.all_day and ev.start <= _local(ms["dateTime"])
+        return isinstance(slot, datetime) and slot <= _local(ms["dateTime"])
     return False
 
 
@@ -115,6 +130,29 @@ def event_props(v):
         P_COUNTDOWN: v.get("countdown") or "",
         P_CD: "1" if v.get("countdown") else "",  # 카운트다운만 골라 받기 위한 표시
     }
+
+
+def _props_values(p):
+    """extendedProperties.private → 편집 값의 속성들(event_props의 반대)."""
+    try:
+        order = int(p.get(P_ORDER) or 0)
+    except ValueError:
+        order = 0
+    return {"done": p.get(P_DONE) == "1", "text_color": p.get(P_COLOR, ""), "order": order,
+            "line": p.get(P_LINE) == "1", "alarm": p.get(P_ALARM, ""), "countdown": p.get(P_COUNTDOWN, "")}
+
+
+def _series_values(ev, v, master):
+    """반복 전체·뒤쪽에 쓸 편집 값: 이 회차에서 바꾼 속성만 원본의 속성에 얹는다.
+    (이 회차만 완료했거나 색을 바꾼 것이 '모든 일정'·'이번 및 이후'로 고칠 때 전체로 퍼지지 않게)"""
+    base = _props_values(master.get("extendedProperties", {}).get("private", {}))
+    mine = {"done": ev.done, "text_color": ev.text_color, "order": ev.order, "line": ev.line,
+            "alarm": ev.alarm, "countdown": ev.countdown}
+    out = dict(v)
+    for k, old in mine.items():
+        if k not in v or (v[k] or "") == (old or ""):
+            out[k] = base[k]
+    return out
 
 
 def google_reminders(v):
@@ -359,6 +397,14 @@ class GCal:
                 ev = self._parse(item, cal)
                 if ev:
                     countdowns.append(ev)
+            # 'N일 경과' 카운트다운(사귄 날 등)은 아주 오래전 날짜일 수 있다. 반복으로 펼치지 않고 한 번짜리만 더 받는다.
+            for item in self._list_events(cal["id"], None, today - timedelta(days=400), private=f"{P_CD}=1",
+                                          single=False):
+                if "recurrence" in item or "recurringEventId" in item:
+                    continue
+                ev = self._parse(item, cal)
+                if ev and ev.countdown_parts() and ev.countdown_parts()[2] == "passed":
+                    countdowns.append(ev)
         task_lists, tasks, tasks_status = self.fetch_tasks(start, end)
         return calendars + task_lists, events + tasks, holidays, (start, end), countdowns, tasks_status
 
@@ -383,10 +429,13 @@ class GCal:
                     lst.append((name, public))
         return holidays
 
-    def _list_events(self, cal_id, start, end, q=None, private=None):
+    def _list_events(self, cal_id, start, end, q=None, private=None, single=True):
+        """single=False면 반복 일정을 회차로 펼치지 않는다(원본 하나로 온다)."""
         svc, page = self._service(), None
         while True:
-            kw = dict(calendarId=cal_id, singleEvents=True, orderBy="startTime", maxResults=2500, pageToken=page)
+            kw = dict(calendarId=cal_id, singleEvents=single, maxResults=2500, pageToken=page)
+            if single:
+                kw["orderBy"] = "startTime"  # 회차로 펼칠 때만 쓸 수 있다
             if start:
                 kw["timeMin"] = _rfc3339(start)
             if end:
@@ -428,7 +477,7 @@ class GCal:
             start=start, end=end, all_day=all_day, color=color,
             description=item.get("description", ""), location=item.get("location", ""),
             recurring="recurringEventId" in item, html_link=item.get("htmlLink", ""),
-            recurring_event_id=item.get("recurringEventId", ""),
+            recurring_event_id=item.get("recurringEventId", ""), original=_original_start(item),
             done=p.get(P_DONE) == "1", text_color=p.get(P_COLOR, ""), order=order,
             line=p.get(P_LINE) == "1", alarm=p.get(P_ALARM, ""), countdown=p.get(P_COUNTDOWN, ""),
             popup_minutes=popups, writable=cal["writable"],
@@ -491,7 +540,7 @@ class GCal:
             for k in ("start", "end"):
                 body[k] = {kk: vv for kk, vv in body[k].items() if vv is not None}
             if v.get("recurrence"):
-                body["recurrence"] = [v["recurrence"]]
+                body["recurrence"] = [v["recurrence"]] + list(v.get("exdates") or [])
             if v.get("event_id"):  # 미리 정한 id: 다시 보내도 409로 막혀 두 번 만들어지지 않는다
                 body["id"] = v["event_id"]
         return body
@@ -517,11 +566,21 @@ class GCal:
                 return self._update_series(ev, v)
             old = _rrule_line(master.get("recurrence"))
             rule = v.get("recurrence")
-            if rule is KEEP or rule == old:  # 규칙을 그대로 두면 끝(UNTIL)은 지키고 남은 횟수(COUNT)만 다시 센다
+            same = rule is KEEP or rule == old
+            if same:  # 규칙을 그대로 두면 끝(UNTIL)은 지키고 남은 횟수(COUNT)만 다시 센다
                 rule = self._remaining_rule(ev, old) if old else NO_REPEAT
+            v = _series_values(ev, v, master)
+            # 예전 반복의 뒤쪽 예외(지운 회차·회차마다 둔 완료 표시)는 새 반복에 옮긴다(앞쪽을 자르면 사라진다).
+            # 규칙을 바꿨으면 회차 날짜가 달라져 옮기지 않는다. 자르기 전에 읽어야 다시 보내도 같은 결과가 된다.
+            exdates, marks = self._later_exceptions(ev, master, v) if same and rule else ([], [])
             # 뒤쪽 반복을 먼저 만들고(미리 정한 id라 다시 보내도 409로 막힌다) 그다음 앞쪽을 자른다.
             # 거꾸로 하면 자른 직후 끊겼을 때 다시 보내면서 잘린 규칙을 원래 규칙으로 읽게 된다.
-            new_id = self.create_event(dict(v, recurrence=rule))
+            new_id = self.create_event(dict(v, recurrence=rule, exdates=exdates))
+            try:
+                self._mark_instances(v, new_id, marks)
+            except HttpError as e:
+                if is_transient(e):  # 표시는 덤이라 거절되면 넘어가고, 일시 장애면 다시 보낸다
+                    raise
             try:
                 self._end_series_before(ev, master)
             except HttpError as e:
@@ -541,6 +600,7 @@ class GCal:
     def _update_series(self, ev, v):
         svc = self._service()
         master = self._call(svc.events().get(calendarId=ev.calendar_id, eventId=ev.recurring_event_id))
+        v = _series_values(ev, v, master)
         body = self._body(v, reset_reminders=bool(ev.alarm))
         # 시작·끝은 원본 날짜를 기준으로, 인스턴스에서 바뀐 만큼만 옮긴다
         if v["all_day"] and "date" in master["start"]:
@@ -565,7 +625,7 @@ class GCal:
         if not m:
             return rule
         svc, used, page = self._service(), 0, None
-        before = _rfc3339(ev.start) if ev.all_day else ev.start.astimezone().isoformat()
+        before = _when(ev.slot)
         while True:
             r = self._call(svc.events().instances(calendarId=ev.calendar_id, eventId=ev.recurring_event_id,
                                                   timeMax=before, showDeleted=True, pageToken=page, maxResults=2500))
@@ -575,16 +635,74 @@ class GCal:
                 break
         return rule[:m.start(1)] + str(max(1, int(m.group(1)) - used)) + rule[m.end(1):]
 
+    def _later_exceptions(self, ev, master, v):
+        """'이번과 이후'로 새로 만들 뒤쪽 반복에 옮겨 줄 예전 반복의 예외 → (EXDATE 줄 목록, [(새 회차 자리, 속성)])
+        - 지운 회차: 새 반복에서도 빠지게 EXDATE로
+        - 회차마다 따로 둔 완료·글자색: 새 반복의 같은 회차에 다시 표시(_mark_instances)
+        회차 자리는 이 회차를 v의 시작으로 옮긴 만큼 함께 옮긴다. 너무 먼 미래(2년 뒤)까지는 보지 않는다."""
+        slot = ev.slot
+        if v["all_day"] == isinstance(slot, datetime):  # 종일 ↔ 시간 일정으로 바꿨으면 회차 자리가 맞지 않는다
+            return [], []
+        shift = v["start"] - slot
+        base = master.get("extendedProperties", {}).get("private", {})
+        svc, page, exdates, marks = self._service(), None, [], []
+        while True:
+            r = self._call(svc.events().instances(
+                calendarId=ev.calendar_id, eventId=ev.recurring_event_id, timeMin=_when(slot),
+                timeMax=_when(slot + timedelta(days=730)), showDeleted=True, pageToken=page, maxResults=2500))
+            for it in r.get("items", []):
+                o = _original_start(it)
+                if o is None or type(o) is not type(slot) or o <= slot:
+                    continue
+                if it.get("status") == "cancelled":
+                    exdates.append(o + shift)
+                    continue
+                p = it.get("extendedProperties", {}).get("private", {})
+                diff = {k: p.get(k, "") for k in (P_DONE, P_COLOR) if p.get(k, "") != base.get(k, "")}
+                if diff:
+                    marks.append((o + shift, diff))
+            page = r.get("nextPageToken")
+            if not page:
+                break
+        if not exdates:
+            return [], marks
+        if isinstance(slot, datetime):
+            return ["EXDATE:" + ",".join(d.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ") for d in exdates)], marks
+        return ["EXDATE;VALUE=DATE:" + ",".join(d.strftime("%Y%m%d") for d in exdates)], marks
+
+    def _mark_instances(self, v, new_id, marks):
+        """새 반복(new_id)의 회차들에 예전 회차의 완료·글자색을 다시 표시한다(다시 보내도 같은 결과)."""
+        if not marks:
+            return
+        want = dict(marks)
+        props = event_props(v)
+        svc, page, reqs = self._service(), None, []
+        while True:
+            r = self._call(svc.events().instances(
+                calendarId=v["calendar_id"], eventId=new_id, timeMin=_when(min(want)),
+                timeMax=_when(max(want) + timedelta(days=1)), pageToken=page, maxResults=2500))
+            for it in r.get("items", []):
+                o = _original_start(it)
+                if o in want:
+                    reqs.append(svc.events().patch(calendarId=v["calendar_id"], eventId=it["id"], body={
+                        "extendedProperties": {"private": dict(props, **want[o])}}))
+            page = r.get("nextPageToken")
+            if not page:
+                break
+        if reqs:
+            self._batch(reqs)
+
     def _end_series_before(self, ev, master=None):
         """반복 일정을 이 회차 앞에서 끝낸다(master: 이미 받아 둔 원본)."""
         svc = self._service()
         if master is None:
             master = self._call(svc.events().get(calendarId=ev.calendar_id, eventId=ev.recurring_event_id))
         rule = _rrule_line(master.get("recurrence"))
-        if ev.all_day:
-            until = (ev.start - timedelta(days=1)).strftime("%Y%m%d")
+        slot = ev.slot  # 다른 날로 옮긴 회차는 원래 자리 앞에서 끊어야 그 회차도 뒤쪽에 들어간다
+        if isinstance(slot, datetime):
+            until = (slot.astimezone(timezone.utc) - timedelta(seconds=1)).strftime("%Y%m%dT%H%M%SZ")
         else:
-            until = (ev.start.astimezone(timezone.utc) - timedelta(seconds=1)).strftime("%Y%m%dT%H%M%SZ")
+            until = (slot - timedelta(days=1)).strftime("%Y%m%d")
         rec = [r for r in master.get("recurrence", []) if not r.upper().startswith("RRULE:")]
         rec.append(rrule_with_until(rule, until))
         self._call(svc.events().patch(calendarId=ev.calendar_id, eventId=ev.recurring_event_id,

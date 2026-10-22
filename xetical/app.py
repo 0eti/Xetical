@@ -26,7 +26,7 @@ from .gcal import ApiDisabledError, AuthError, GCal, is_holiday_calendar, valida
 from .hotkeys import Hotkeys
 from .jobs import Outbox, is_offline
 from .model import EventStore
-from .mood import MoodData, active_tracker
+from .mood import MoodData, active_tracker, merge_trackers
 from .mousehook import ClickThrough
 from .reminders import Reminders
 from .sync import SyncMixin
@@ -590,8 +590,10 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
         values = {k: v for k, v in data.items() if k in DEFAULTS and k not in LOCAL_ONLY_KEYS}
         if isinstance(values.get("mood_trackers"), list):
             # 가져온 트래커는 지금 바꾼 것으로 찍는다(아니면 드라이브의 더 나중 목록에 져서 다시 사라진다)
-            values["mood_trackers"] = [dict(t, t=time.time()) for t in values["mood_trackers"]
-                                       if isinstance(t, dict) and "id" in t]
+            imported = [dict(t, t=time.time()) for t in values["mood_trackers"] if isinstance(t, dict) and "id" in t]
+            # 백업 뒤에 만든 트래커는 남긴다(통째로 바꾸면 칠한 기록만 남은 채 목록에서 사라지고,
+            # 드라이브 동기화를 켜 두었으면 다시 살아나 결과가 달라진다). 같은 트래커는 백업 쪽.
+            values["mood_trackers"] = merge_trackers(imported, {}, self.cfg["mood_trackers"], {})[0]
         if isinstance(values.get("task_repeats"), dict):
             # 할 일 반복 규칙은 이 PC에만 있는 기록이라 통째로 바꾸지 않고 합친다(같은 할 일은 백업 쪽)
             values["task_repeats"] = {**self.cfg["task_repeats"], **values["task_repeats"]}

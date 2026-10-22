@@ -47,7 +47,7 @@ def cleanup():
     n = 0
     for cal in [c for c in g.fetch_all(*RANGE, want_holidays=False)[0] if c["writable"] and not c.get("tasks")]:
         items = svc.events().list(calendarId=cal["id"], q="Xetical 테스트", singleEvents=False,
-                                  timeMin="2026-12-01T00:00:00Z", timeMax="2027-03-01T00:00:00Z").execute().get("items", [])
+                                  timeMin="2024-12-01T00:00:00Z", timeMax="2027-03-01T00:00:00Z").execute().get("items", [])
         for it in items:
             if (it.get("summary") or "").startswith(P):
                 try:
@@ -166,6 +166,52 @@ try:
       _, evs, _, _ = mine()
       days_ = sorted(x.start.date() for x in evs if x.title.endswith("종료일"))
       check("B10 종료일 1/6이면 1/4·1/5·1/6 세 번(1/7 없음)", days_ == [date(2027, 1, 4), date(2027, 1, 5), date(2027, 1, 6)], days_)
+
+      # ---------- 2026-10-22 버그 찾기: '이번 및 이후'(뒤쪽 예외 옮기기·옮긴 회차), 오래된 카운트다운 ----------
+      def series(rid):
+          return sorted([x for x in mine()[1] if x.recurring_event_id == rid], key=lambda x: x.start)
+
+      ws = datetime(2027, 1, 4, 10, 0)  # 월요일 10시, 6회: 1/4·1/11·1/18·1/25·2/1·2/8
+      wid = g.create_event(val("예외 옮기기", D, all_day=False, start=ws, end=ws + timedelta(hours=1),
+                               recurrence="RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=6"))
+      wi = series(wid)
+      g.delete_event(wi[2], "one")   # 1/18 지움
+      g.set_props(wi[3], done=True)  # 1/25 완료
+      g.update_event(wi[1], dict(wi[1].values(), title=f"{P} 예외 뒤쪽"), "following")
+      _, evs, _, _ = mine()
+      later = sorted([x for x in evs if x.title.endswith("예외 뒤쪽")], key=lambda x: x.start)
+      check("12 시간 반복 '이후': 앞쪽은 1/4만", [x.start.date() for x in evs if x.recurring_event_id == wid]
+            == [date(2027, 1, 4)])
+      check("12 시간 반복 '이후': 지운 1/18은 새 반복에도 없음(EXDATE)", [x.start.date() for x in later]
+            == [date(2027, 1, 11), date(2027, 1, 25), date(2027, 2, 1), date(2027, 2, 8)], [x.start for x in later])
+      check("12 시간 반복 '이후': 완료한 1/25는 새 반복에서도 완료, 나머지는 아님",
+            [x.done for x in later] == [False, True, False, False], [(x.start.date(), x.done) for x in later])
+
+      aid = g.create_event(val("종일 예외", date(2027, 1, 4), recurrence="RRULE:FREQ=DAILY;COUNT=5"))  # 1/4~1/8
+      ai = series(aid)
+      g.delete_event(ai[2], "one")  # 1/6 지움
+      g.update_event(ai[1], dict(ai[1].values(), title=f"{P} 종일 뒤쪽"), "following")
+      later = sorted(x.first_day for x in mine()[1] if x.title.endswith("종일 뒤쪽"))
+      check("12 종일 반복 '이후': 지운 1/6은 새 반복에도 없음(EXDATE;VALUE=DATE)",
+            later == [date(2027, 1, 5), date(2027, 1, 7), date(2027, 1, 8)], later)
+
+      ms = datetime(2027, 1, 6, 10, 0)  # 수요일 10시, 4회: 1/6·1/13·1/20·1/27
+      mid = g.create_event(val("옮긴 회차", D, all_day=False, start=ms, end=ms + timedelta(hours=1),
+                               recurrence="RRULE:FREQ=WEEKLY;BYDAY=WE;COUNT=4"))
+      g.move_event(series(mid)[1], 2)  # 1/13 → 1/15
+      moved = next((x for x in series(mid) if x.start.date() == date(2027, 1, 15)), None)
+      check("9 옮긴 회차에 원래 자리(originalStartTime)가 옴", moved is not None and moved.original == ms + timedelta(days=7),
+            moved and (moved.start, moved.original))
+      g.delete_event(moved, "following")
+      check("9 옮긴 회차부터 지우기: 1/6만 남음(옮긴 1/15도 지워짐)",
+            [x.start.date() for x in series(mid)] == [date(2027, 1, 6)], [x.start for x in series(mid)])
+
+      old = date(2025, 1, 11)  # 400일보다 오래전
+      pid = g.create_event(val("오래된 경과", old, countdown="memorial|both|passed"))
+      lid = g.create_event(val("오래된 남은 날", old, countdown="exam|bar|left"))
+      cd_ids = {c.id for c in mine()[2]}
+      check("6 400일보다 오래된 'N일 경과' 카운트다운을 받음", pid in cd_ids, cd_ids)
+      check("6 오래된 '남은 날' 카운트다운은 받지 않음", lid not in cd_ids, cd_ids)
 
       # ---------- 트래커 드라이브 동기화(앱 전용 폴더, 시험용 파일 이름) ----------
       if g.has_drive_scope():

@@ -28,6 +28,7 @@ class Event:
     recurring: bool = False
     html_link: str = ""
     recurring_event_id: str = ""
+    original: object = None          # 반복 회차의 원래 자리(옮긴 회차면 start와 다르다). 종일이면 date, 아니면 datetime
     # DesktopCal식 속성(구글 extendedProperties.private 에 저장되어 다른 PC와도 맞춰진다)
     done: bool = False               # 완료(취소선)
     text_color: str = ""             # 글자색("" = 기본)
@@ -51,6 +52,11 @@ class Event:
             last = (self.end - timedelta(microseconds=1)).date() if self.end > self.start else first
         last = max(first, last)
         return [first + timedelta(days=i) for i in range((last - first).days + 1)]
+
+    @property
+    def slot(self):
+        """반복 회차가 원래 있던 자리(옮기지 않았으면 start). '이번과 이후'를 나누는 기준."""
+        return self.original if self.original is not None else self.start
 
     @property
     def first_day(self):
@@ -103,13 +109,18 @@ class Event:
         d = asdict(self)
         d["start"] = self.start.isoformat()
         d["end"] = self.end.isoformat()
+        if self.original is not None:
+            d["original"] = {"$t" if isinstance(self.original, datetime) else "$d": self.original.isoformat()}
         return d
 
     @classmethod
     def from_json(cls, d):
         conv = date.fromisoformat if d["all_day"] else datetime.fromisoformat
         known = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
-        return cls(**dict(known, start=conv(d["start"]), end=conv(d["end"])))
+        orig = d.get("original")
+        if isinstance(orig, dict):
+            orig = datetime.fromisoformat(orig["$t"]) if "$t" in orig else date.fromisoformat(orig["$d"])
+        return cls(**dict(known, start=conv(d["start"]), end=conv(d["end"]), original=orig))
 
 
 class EventStore:

@@ -1,5 +1,6 @@
 """할 일(구글 Tasks)과 반복 할 일. 구글은 반복 할 일의 다음 회차를 만들어 주지 않아서 여기서 만든다.
 App이 상속해서 쓴다(self는 App)."""
+import calendar as pycal
 from datetime import timedelta
 
 from PySide6.QtWidgets import QMessageBox
@@ -42,11 +43,23 @@ class TaskMixin:
         """같은 목록·같은 이름의 할 일들(반복 할 일의 회차들)."""
         return [e for e in self.store.events if e.task_list == ev.task_list and e.title == ev.title and not e.virtual]
 
+    def _anchor_day(self, ev, rule):
+        """월·연 반복의 원래 날짜. 31일 회차가 2월 28일로 당겨졌으면 예전 회차에서 31을 찾아 다음 회차를 다시 31일로
+        (안 그러면 3/28·4/28…로 계속 밀린다). 달의 마지막 날이 아니면 그 날짜 그대로."""
+        if rule not in ("monthly", "yearly"):
+            return None
+        d = ev.first_day
+        if d.day != pycal.monthrange(d.year, d.month)[1]:
+            return d.day
+        return max([e.first_day.day for e in self._series(ev)
+                    if rule == "monthly" or e.first_day.month == d.month] + [d.day])
+
     def _create_next_occurrence(self, ev):
         """반복 할 일의 다음 회차를 진짜 할 일로 만든다. 이미 그 날짜(또는 그 뒤) 회차가 있으면 만들지 않는다.
         되돌리기용 반대 작업 목록을 돌려준다."""
         rule = self._task_rule(ev)
-        nxt = repeat_dates(ev.start, rule, ev.start + timedelta(days=400))[:1] if rule else []
+        nxt = repeat_dates(ev.start, rule, ev.start + timedelta(days=400), self._anchor_day(ev, rule))[:1] \
+            if rule else []
         if not nxt or any(e.first_day >= nxt[0] for e in self._series(ev)):
             return []
         d = nxt[0]
@@ -128,7 +141,7 @@ class TaskMixin:
                     if key not in latest or ev.start > latest[key].start:
                         latest[key] = ev
             for key, ev in latest.items():
-                for i, d in enumerate(repeat_dates(ev.start, reps[key], until)):
+                for i, d in enumerate(repeat_dates(ev.start, reps[key], until, self._anchor_day(ev, reps[key]))):
                     self.store.events.append(Event(
                         id=f"vtask:{i}:{ev.id}", calendar_id=ev.calendar_id, title=ev.title, start=d,
                         end=d + timedelta(days=1), all_day=True, color=ev.color, task_list=ev.task_list,

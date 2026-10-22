@@ -61,9 +61,9 @@ class CountdownCard(QWidget):
         p.setPen(QColor(255, 255, 255, 40))
         p.setBrush(shade(self.cfg["cell_bg"], 0.6, alpha))
         p.drawRoundedRect(r, 8, 8)
-        kind, _show, fmt = self.ev.countdown_parts()
+        kind = self.ev.countdown_parts()[0]
         days = (self.ev.first_day - date.today()).days
-        passed = fmt == "passed" or days < 0
+        passed = days < 0  # 'N일 경과' 형식이어도 아직 오지 않은 날은 남은 날로 센다
         k = self.scale()
         p.setFont(make_font(self.cfg["item_font"], 0.75 * k, bold=False))
         p.setPen(QColor(self.cfg["lunar_text"]))

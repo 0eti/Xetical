@@ -6,7 +6,7 @@ from datetime import timedelta
 from PySide6.QtGui import QGuiApplication
 
 from .dialogs import EventDialog, ask_scope, bring_to_front, rule_dates
-from .editor import CellEditor
+from .editor import CellEditor, line_text
 from .gcal import event_props
 from .jobs import new_tmp
 from .model import Event
@@ -109,7 +109,9 @@ class EditMixin:
             ev = ln["ev"]
             if ev and ev.id in live:
                 e = live[ev.id]
-                e.title, e.done, e.text_color, e.order = ln["text"], ln["done"], ln["color"], i
+                if line_text(e.title) != line_text(ln["text"]):  # 안 바꾼 제목은 원래 글자(줄바꿈·공백) 그대로
+                    e.title = ln["text"]
+                e.done, e.text_color, e.order = ln["done"], ln["color"], i
         it = iter(tmps)
         for op in ops:
             if op[0] == "create":

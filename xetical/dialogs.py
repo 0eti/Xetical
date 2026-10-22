@@ -603,8 +603,9 @@ TASK_REPEATS = {"none": "안 함", "daily": "매일", "weekly": "매주", "biwee
                 "monthly": "매월", "yearly": "매년"}
 
 
-def repeat_dates(base, rule, until):
-    """반복 할 일의 base 다음 회차들(until 전까지). 월·연 반복은 원래 날짜 기준이라 31일이 30일로 밀리지 않는다."""
+def repeat_dates(base, rule, until, day=None):
+    """반복 할 일의 base 다음 회차들(until 전까지). 월·연 반복은 원래 날짜 기준이라 31일이 30일로 밀리지 않는다.
+    day: 월·연 반복의 원래 날짜(base가 2월 28일로 당겨진 31일 회차면 31). 없으면 base의 날짜."""
     days = {"daily": 1, "weekly": 7, "biweekly": 14}.get(rule)
     months = {"monthly": 1, "yearly": 12}.get(rule)
     out, k = [], 1
@@ -613,7 +614,7 @@ def repeat_dates(base, rule, until):
             d = base + timedelta(days=days * k)
         else:
             y, m = divmod(base.year * 12 + base.month - 1 + months * k, 12)
-            d = date(y, m + 1, min(base.day, pycal.monthrange(y, m + 1)[1]))
+            d = date(y, m + 1, min(day or base.day, pycal.monthrange(y, m + 1)[1]))
         if d >= until:
             break
         out.append(d)

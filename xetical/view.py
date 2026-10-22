@@ -71,7 +71,7 @@ def title_text(cfg, t=None):
               "week": week_number(t, cfg["week_start"], cfg["first_week"])}
     try:
         return (cfg.get("title_format") or DEFAULT_TITLE).format(**values)
-    except (KeyError, ValueError, IndexError):
+    except Exception:  # 사용자가 쓴 형식이라 무엇이든 틀릴 수 있다({year.x}는 AttributeError 등). 달력이 안 그려지면 안 된다
         return DEFAULT_TITLE.format(**values)
 
 
@@ -197,7 +197,9 @@ class CalendarWindow(QWidget):
             return t
         if mode == "fixed_row":
             return self.week_first(t)
-        return self.week_first(t) - timedelta(days=7 * self.cfg["passed_weeks"])
+        # 지나간 주가 화면 행 수만큼이면 오늘이 화면 밖으로 나가므로 오늘 주는 늘 남긴다
+        passed = min(self.cfg["passed_weeks"], max(1, self.cfg["weeks"]) - 1)
+        return self.week_first(t) - timedelta(days=7 * passed)
 
     def grid_shape(self):
         if self.mode == "month":
@@ -759,12 +761,10 @@ class CalendarWindow(QWidget):
         return out
 
     def countdown_text(self, ev):
-        kind, _show, fmt = ev.countdown_parts()
+        kind = ev.countdown_parts()[0]
         days = (ev.first_day - date.today()).days
-        if fmt == "passed" or days < 0:
-            when = f"{abs(days)}일 경과" if days < 0 else "오늘"
-        else:
-            when = "오늘" if days == 0 else f"{days}일 남음"
+        # 'N일 경과' 형식이어도 아직 오지 않은 날은 남은 날로 센다(형식은 어느 회차를 보일지만 정한다)
+        when = f"{-days}일 경과" if days < 0 else "오늘" if days == 0 else f"{days}일 남음"
         return f"[{COUNTDOWN_TYPES.get(kind, '카운트다운')}] {ev.title} {when}"
 
     def _paint_countdown_bar(self, p, L):
@@ -1073,7 +1073,10 @@ class CalendarWindow(QWidget):
             self._scroll[d] = max(0, self._scroll.get(d, 0) + (-step if dy > 0 else step))
             self.update()
         elif self.cfg["wheel_paging"]:
-            self.shift_weeks(-1 if dy > 0 else 1)
+            if self.mode == "month":  # 전체 월은 1일을 기준으로 그리므로 주 단위로 밀면 칸이 어긋난다 → 한 달씩
+                self.shift_page(-1 if dy > 0 else 1)
+            else:
+                self.shift_weeks(-1 if dy > 0 else 1)
 
     def select(self, ev, d):
         self.selected_event, self.selected_day = ev, d

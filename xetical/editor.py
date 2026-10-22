@@ -19,6 +19,12 @@ from .widgets import color_menu, play_sound
 WEEKDAYS = "월화수목금토일"
 
 
+def line_text(title):
+    """일정 제목을 칸 편집기의 한 줄 글자로. 줄바꿈·앞뒤·겹친 공백은 한 칸으로 모은다
+    (휴대폰 등에서 만든 'A\\nB'·'헬스 ' 같은 제목을 열었다 닫기만 해도 쪼개지거나 고쳐 써지지 않게)."""
+    return " ".join(title.split())
+
+
 class _Line:
     """한 줄의 상태. block.userState()가 이 목록의 번호를 가리킨다."""
 
@@ -175,7 +181,7 @@ class CellEditor(QWidget):
         for i, ev in enumerate(self.line_events):
             if i:
                 cur.insertBlock()
-            cur.insertText(ev.title)
+            cur.insertText(line_text(ev.title))
             self._lines.append(_Line(ev, ev.done, ev.text_color))
             cur.block().setUserState(len(self._lines) - 1)
         if not self.line_events:
@@ -199,7 +205,7 @@ class CellEditor(QWidget):
             nxt = b.next()
             ln = self._lines[b.userState()] if b.userState() >= 0 else None
             if ln and not b.text() and nxt.isValid() and nxt.userState() < 0 and nxt.text() \
-                    and (ln.ev is None or ln.ev.title == nxt.text().strip()):
+                    and (ln.ev is None or line_text(ln.ev.title) == line_text(nxt.text())):
                 # 줄 맨 앞에서 Enter: Qt는 번호를 위쪽 빈 줄에 남기고 글자를 새 줄로 내린다 → 번호도 글자를 따라 내린다
                 nxt.setUserState(b.userState())
                 b.setUserState(-1)
@@ -293,7 +299,7 @@ class CellEditor(QWidget):
         orphans = [e for e in self.line_events if e.id not in used]
         for ln in lines:  # 줄을 나누거나 합쳐서 번호를 잃은 줄은 같은 내용의 기존 일정과 다시 짝짓는다
             if ln["ev"] is None:
-                match = next((e for e in orphans if e.title == ln["text"]), None)
+                match = next((e for e in orphans if line_text(e.title) == line_text(ln["text"])), None)
                 if match:
                     ln["ev"] = match
                     orphans.remove(match)
@@ -304,14 +310,15 @@ class CellEditor(QWidget):
         # 무엇이든 바뀌었으면 순서 번호를 모두 새로 매긴다(휴대폰에서 만든 일정은 번호가 모두 0이라, 이름만 바꿔도
         # 제목순으로 다시 섞인다). 열었다 닫기만 했으면 구글에 쓰지 않는다.
         changed = [ln["ev"].id if ln["ev"] else None for ln in lines] != [e.id for e in self.line_events] or any(
-            (ln["ev"].done, ln["ev"].text_color or "", ln["ev"].title) != (ln["done"], ln["color"], ln["text"])
+            (ln["ev"].done, ln["ev"].text_color or "", line_text(ln["ev"].title))
+            != (ln["done"], ln["color"], line_text(ln["text"]))
             for ln in lines if ln["ev"])
         for i, ln in enumerate(lines):
             ev = ln["ev"]
             props = {"done": ln["done"], "text_color": ln["color"], "order": i if changed or not ev else ev.order,
                      "line": True}
             if ev:
-                renamed = ev.title != ln["text"]
+                renamed = line_text(ev.title) != line_text(ln["text"])
                 if ev.recurring and renamed:  # 반복 일정 이름 바꾸기는 범위를 묻는다
                     ask.append(("rename", ev, ln["text"]))
                 own = (ev.done, ev.text_color or "") != (ln["done"], ln["color"]) or (renamed and not ev.recurring)
@@ -320,7 +327,7 @@ class CellEditor(QWidget):
                     # 줄이 되면 '미완료 자동 연기'가 오늘로 옮겨 버린다.
                     props.update(alarm=ev.alarm, countdown=ev.countdown, line=ev.line or (own and not ev.recurring))
                     body = {"extendedProperties": {"private": event_props(props)}}
-                    if not ev.recurring:
+                    if renamed and not ev.recurring:  # 이름을 안 바꿨으면 원래 제목(줄바꿈·공백 포함)을 그대로 둔다
                         body["summary"] = ln["text"]
                     ops.append(("patch", ev.calendar_id, ev.id, body))
             elif self.default_cal:

@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SUITES = ["t_all", "t_more", "t_repeat", "t_fixes", "t_mood"]  # 가짜 구글로 도는 시험
+SUITES = ["t_all", "t_more", "t_repeat", "t_fixes", "t_mood", "t_bugs"]  # 가짜 구글로 도는 시험
 LIVE = ["t_google"]                                  # 실제 구글 계정을 쓰는 시험
 
 

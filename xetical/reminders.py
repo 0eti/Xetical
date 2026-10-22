@@ -149,7 +149,7 @@ class Reminders(QObject):
                 continue
             seen.add(ev.id)
             for t in alarm_times(ev):
-                key = f"{ev.id}|{t:%Y%m%d%H%M}"
+                key = f"{self._key_id(ev)}|{t:%Y%m%d%H%M}"
                 if t <= now < t + WINDOW and key not in self.fired:
                     self.fired.add(key)
                     new = True
@@ -159,13 +159,23 @@ class Reminders(QObject):
             self.fired = {k for k in self.fired if k.rsplit("|", 1)[-1][:8] >= cutoff}
             save_json(FIRED_PATH, sorted(self.fired))
 
+    def _key_id(self, ev):
+        """띄운 알림을 기억하는 이름. 새 일정은 임시 id(tmp-…)로 먼저 보이다가 동기화 뒤 진짜 id로 바뀌므로
+        진짜 id로 맞춘다. 반복 일정은 회차 id 대신 원본 id를 쓴다(알림 시각이 회차를 가른다):
+        임시로 그린 회차(tmp-…_날짜)와 구글에서 받은 회차의 id 모양이 달라도 같은 알림으로 친다."""
+        base = ev.recurring_event_id or ev.id
+        if base.startswith("tmp-"):
+            base = base.split("_", 1)[0]
+        return self.app.outbox.real_id(base)
+
     def _show(self, ev):
         if ev.all_day:
             when = f"{ev.first_day:%m월 %d일} (하루 종일)"
         else:
             when = f"{ev.start:%m월 %d일 %H:%M} ~ {ev.end:%H:%M}"
-        self.popups = [p for p in self.popups if p.isVisible()]
         popup = ReminderPopup(ev, when, self.app.edit_event, len(self.popups))
         self.popups.append(popup)
+        # 닫으면 창이 지워진다(WA_DeleteOnClose). 목록에 남겨 두면 다음 알림 때 지워진 창을 건드려 알림이 멈춘다.
+        popup.destroyed.connect(lambda *_, p=popup: setattr(self, "popups", [q for q in self.popups if q is not p]))
         popup.show()
         play_sound(self.app.cfg["alarm_sound"])
