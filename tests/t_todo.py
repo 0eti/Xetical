@@ -362,4 +362,115 @@ check("3 아침 요약: 오늘 회차는 할 일, 지난 30일 안 미완료는 
       and not any("오래된" in t or "끝낸" in t for t in lines) and "할 일 2개" in title and "일정 1개" in title,
       (title, lines))
 
+# ---------- 4: '할 일 수정' 창으로 고치기·지우기 ----------
+import xetical.editing as ED
+import xetical.tasks as TK
+
+pump(lambda: len(a.outbox) == 0)
+a.store.set(CALS, [], {}, RANGE)
+RULE = "RRULE:FREQ=WEEKLY;BYDAY=FR"
+asked, answer = [], ["following"]
+TK.ask_scope = ED.ask_scope = lambda parent, verb, allow_one=True: (asked.append((verb, allow_one)), answer[0])[1]
+ED.ask_confirm = lambda *args, **kw: True
+
+
+def opened(rrule=RULE, ev=None):
+    asked.clear()
+    ev = ev or todo_ev("rt_20270115", FRI)
+    a._open_todo_dialog(ev, rrule)
+    return ev, a._dialogs[-1]
+
+
+def save(dlg, action="save"):
+    dlg.action = action
+    dlg.accepted.emit()
+    pump(lambda: len(a.outbox) == 0)
+
+
+ev, dlg = opened()
+check("4 창의 반복 칸에 지금 규칙", dlg.repeat.currentData() == "weekly" and not dlg.list.isVisibleTo(dlg))
+n_upd = len(jobs_named("update_event"))
+dlg.done_box.setChecked(True)
+save(dlg)
+check("4 완료만 바꾸면 묻지 않고 그 회차만", asked == [] and ev.done and jobs_named("set_event_done")[-1][1] is True
+      and len(jobs_named("update_event")) == n_upd, asked)
+
+ev, dlg = opened()
+answer[0] = "following"
+dlg.title.setText("발톱 깎기")
+dlg.due.setDate(dlg.due.date().addDays(1))
+save(dlg)
+u = jobs_named("update_event")[-1]
+check("4 이후 범위로 날짜를 바꾸면 규칙도 새 요일", asked == [("수정", True)] and u[2] == "following"
+      and u[1]["recurrence"] == "RRULE:FREQ=WEEKLY;BYDAY=SA" and u[1]["todo"] and u[1]["title"] == "발톱 깎기"
+      and u[1]["start"] == FRI + timedelta(days=1) and u[1]["all_day"], (asked, u[1:]))
+
+ev, dlg = opened()
+answer[0] = "one"
+dlg.due.setDate(dlg.due.date().addDays(2))
+save(dlg)
+u = jobs_named("update_event")[-1]
+check("4 '이번만' 날짜 바꾸기는 그 회차만 옮기고 규칙은 그대로", u[2] == "one" and u[1]["recurrence"] is None
+      and u[1]["start"] == FRI + timedelta(days=2), u[1:])
+
+ev, dlg = opened()
+answer[0] = "all"
+dlg.repeat.setCurrentIndex(dlg.repeat.findData("monthly"))
+save(dlg)
+u = jobs_named("update_event")[-1]
+check("4 반복을 바꾸면 '이번만' 없이 묻고 새 규칙", asked == [("수정", False)] and u[2] == "all"
+      and u[1]["recurrence"] == "RRULE:FREQ=MONTHLY;BYMONTHDAY=15", (asked, u[1:]))
+
+ev, dlg = opened()
+n_del = len(jobs_named("delete_event"))
+dlg.repeat.setCurrentIndex(dlg.repeat.findData("none"))
+save(dlg)
+d = jobs_named("delete_event")
+check("4 반복을 '안 함'으로 바꾸면 묻지 않고 이 회차부터 끝냄", asked == [] and len(d) == n_del + 1
+      and d[-1][0].id == "rt_20270115" and d[-1][1] == "following", (asked, d[-1:]))
+
+ev, dlg = opened()
+answer[0] = "all"
+save(dlg, "delete")
+d = jobs_named("delete_event")
+check("4 삭제는 범위를 물어 그 범위로", asked == [("삭제", True)] and d[-1][1] == "all", (asked, d[-1:]))
+
+ev, dlg = opened("RRULE:FREQ=WEEKLY;BYDAY=MO,WE")
+check("4 (Review 2) 휴대폰에서 바꾼 규칙은 '기존 규칙 유지'", dlg.repeat.currentData() == "keep")
+answer[0] = "all"
+dlg.title.setText("손발톱 깎기")
+save(dlg)
+u = jobs_named("update_event")[-1]
+check("4 (Review 2) 제목만 바꾸면 규칙은 그대로", u[2] == "all" and u[1]["recurrence"] is None
+      and u[1]["title"] == "손발톱 깎기", u[1:])
+
+fake.rrule = RULE
+n_dlg = len(a._dialogs)
+a.edit_event(todo_ev("rt_20270122", FRI + timedelta(days=7)))
+pump(lambda: len(a._dialogs) > n_dlg)
+check("4 반복 할 일을 열면 규칙을 읽어 '할 일 수정' 창", type(a._dialogs[-1]).__name__ == "TaskDialog"
+      and a._dialogs[-1].repeat.currentData() == "weekly")
+n_dlg = len(a._dialogs)
+a.edit_event(plain_rec)
+pump(lambda: len(a._dialogs) > n_dlg)
+check("4 (Review 4) 보통 반복 일정은 지금처럼 일정 창", type(a._dialogs[-1]).__name__ == "EventDialog")
+
+a.clip = todo_ev("rt_20270115", FRI, description="메모")
+a.paste(FRI + timedelta(days=3))
+c = jobs_named("create_task")[-1]
+check("4 붙여넣기는 그 날짜에 반복 없는 구글 할 일", c == ("L1", "손톱 깎기", "메모", FRI + timedelta(days=3)), c)
+
+target = todo_ev("rt_20270129", FRI + timedelta(days=14))
+a.store.events.append(target)
+a.win.selected_event = target
+answer[0] = "one"
+asked.clear()
+a.delete_selected()
+d = jobs_named("delete_event")
+check("4 Delete 키는 범위를 물어 지움", asked == [("삭제", True)] and d[-1][0].id == "rt_20270129" and d[-1][1] == "one")
+asked.clear()
+a.move_event(todo_ev("rt_20270205", FRI + timedelta(days=21)), 2)
+mv = jobs_named("move_event")
+check("4 끌어서 옮기기는 그 회차만, 묻지 않음", asked == [] and mv[-1][0].id == "rt_20270205" and mv[-1][1] == 2)
+
 print(f"\n{sum(ok for _, ok in results)}/{len(results)} 통과")

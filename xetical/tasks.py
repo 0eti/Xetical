@@ -5,10 +5,10 @@ from datetime import timedelta
 
 from PySide6.QtWidgets import QMessageBox
 
-from .dialogs import TaskDialog, repeat_dates
+from .dialogs import TaskDialog, ask_scope, repeat_dates
 from .jobs import new_tmp
-from .model import Event
-from .todos import todo_values
+from .model import KEEP, Event
+from .todos import rule_of, todo_rrule, todo_values
 from .widgets import confirm as ask_confirm
 from .widgets import play_sound
 
@@ -149,6 +149,47 @@ class TaskMixin:
         self._add_temp_repeats(ev, v["recurrence"])
         self.outbox.add(op, *before, v, tmps=[tmp], label="새 반복 할 일")
         return ev
+
+    def _open_todo_dialog(self, ev, rrule):
+        """반복 할 일의 '할 일 수정' 창(일정 창 대신). rrule: 구글에서 읽어 온 반복 규칙."""
+        dlg = TaskDialog(self.task_lists(), event=ev, repeat=rule_of(rrule, ev.first_day) or "keep", todo=True)
+        dlg.accepted.connect(lambda: self._save_todo(ev, rrule, dlg))
+        self._keep(dlg)
+
+    def _save_todo(self, ev, rrule, dlg):
+        """완료만 바꾸면 그 회차만(묻지 않음), 반복을 '안 함'으로 바꾸면 이 회차부터 끝내고(묻지 않음),
+        그 밖에 고치거나 지우면 '이번만 / 이번 및 이후 / 모든 회차'를 묻는다(반복을 바꾸면 '이번만'은 없다)."""
+        v = dlg.values()
+        old_rule = rule_of(rrule, ev.first_day)  # None = 이 창이 만들지 않은 규칙(휴대폰에서 바꾼 것 등)
+        if dlg.action == "delete":
+            scope = ask_scope(None, "삭제")
+            if not scope:
+                return
+            if scope == "one":
+                self._remove_local(ev.id)
+            self.outbox.add("delete_event", ev, scope, label="반복 할 일 삭제")
+        elif v["repeat"] == "none":  # 반복을 끝낸다: 이 회차부터 뒤는 지우고, 앞 회차는 기록으로 남긴다
+            self.outbox.add("delete_event", ev, "following", label="반복 할 일 끝내기")
+        else:
+            rule_changed = v["repeat"] not in ("keep", old_rule)
+            moved = v["due"] != ev.first_day
+            if not rule_changed and not moved and (v["title"], v["notes"]) == (ev.title, ev.description):
+                if v["done"] != ev.done:
+                    self._toggle_todo(ev)
+                return
+            scope = ask_scope(None, "수정", allow_one=not rule_changed)
+            if not scope:
+                return
+            if rule_changed:
+                rec = todo_rrule(v["repeat"], v["due"])
+            elif scope != "one" and moved and old_rule:  # 뒤 회차도 새 날짜(요일·날짜)에 맞춘다
+                rec = todo_rrule(old_rule, v["due"])
+            else:
+                rec = KEEP
+            vals = dict(ev.values(), title=v["title"], description=v["notes"], start=v["due"], end=v["due"],
+                        done=v["done"], line=False, todo=True, recurrence=rec)
+            self.outbox.add("update_event", ev, vals, scope, label="반복 할 일 수정")
+        self.sync()
 
     @staticmethod
     def _task_key(list_id, title):

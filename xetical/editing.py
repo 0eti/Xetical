@@ -197,7 +197,7 @@ class EditMixin:
             self.set_status("반복 일정을 불러오지 못했습니다 (인터넷 연결 확인)")
             return
         self.set_status("")
-        self._open_event_dialog(ev, res[0])
+        (self._open_todo_dialog if ev.todo else self._open_event_dialog)(ev, res[0])
 
     def _open_event_dialog(self, ev, rrule):
         dlg = EventDialog(self.store.calendars, event=ev, rrule=rrule, cfg=self.cfg)
@@ -299,6 +299,13 @@ class EditMixin:
         if self.clip is None or day is None:
             return
         src = self.clip
+        if src.todo:  # 반복 할 일 회차는 그 날짜에 반복 없는 구글 할 일 하나로 붙인다
+            lists = self.task_lists()
+            if not lists:
+                self.flash("할 일 목록이 없어 붙여 넣지 못했어요")
+                return
+            src = copy.replace(src, task_list=lists[0]["id"].split(":", 1)[1], calendar_id=lists[0]["id"],
+                               todo=False, recurring=False, recurring_event_id="")
         if src.task_list:
             tmp = new_tmp()
             self._add_temp(Event(id=tmp, calendar_id=src.calendar_id, title=src.title, start=day,
