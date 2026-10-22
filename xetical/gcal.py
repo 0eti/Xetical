@@ -15,6 +15,7 @@ from googleapiclient.http import MediaInMemoryUpload
 from .config import CLIENT_SECRET_PATH, TOKEN_PATH
 from .model import KEEP, NO_REPEAT, Event, parse_alarm
 from .mood import merge_sync
+from .todos import repeat_dates, todo_values
 
 SCOPES = [
     "https://www.googleapis.com/auth/calendar.readonly",
@@ -879,6 +880,45 @@ class GCal:
     def delete_task(self, ev):
         list_id, task_id = self._task_ids(ev)
         self._call(self._tasks().tasks().delete(tasklist=list_id, task=task_id))
+
+    def todo_tasks(self, list_id, title):
+        """그 목록에서 제목이 같은 할 일들(마감일 제한 없이). 예전 반복 할 일을 옮길 때 회차를 찾는 데 쓴다."""
+        svc, page, out = self._tasks(), None, []
+        while True:
+            r = self._call(svc.tasks().list(tasklist=list_id, showCompleted=True, showHidden=True, maxResults=100,
+                                            pageToken=page))
+            for item in r.get("items", []):
+                if item.get("due") and not item.get("deleted") and (item.get("title") or "") == title:
+                    out.append(self._parse_task(item, list_id, f"tasks:{list_id}"))
+            page = r.get("nextPageToken")
+            if not page:
+                return out
+
+    def find_todo_series(self, cal_id, title):
+        """그 캘린더에 제목이 같은 반복 할 일(반복 일정 + 할 일 표시)이 이미 있는가."""
+        return any("recurrence" in it and it.get("summary") == title and it.get("status") != "cancelled"
+                   for it in self._list_events(cal_id, None, None, private=f"{P_TODO}=1", single=False))
+
+    def migrate_repeat(self, list_id, title, rule, cal_id, today):
+        """예전 반복 할 일(구글에는 지금 회차 할 일 하나, 규칙은 이 PC에만)을 반복 일정으로 옮긴다 → none | exists | created.
+        - 마감일이 가장 늦은 할 일이 미완료면 그 날짜부터 시작하고 그 할 일은 지운다(같은 날 두 번 보이지 않게).
+          완료면 오늘이거나 오늘 뒤인 첫 회차부터 시작하고 할 일은 둔다. 지난 완료 기록은 그대로 둔다.
+        - 이미 옮긴 반복 일정이 있으면(다른 PC가 먼저 옮겼거나 다시 보낸 것) 만들지 않고 할 일만 정리한다."""
+        tasks = self.todo_tasks(list_id, title)
+        if not tasks:
+            return "none"
+        latest = max(tasks, key=lambda e: e.start)
+        result = "exists"
+        if not self.find_todo_series(cal_id, title):
+            start = latest.start
+            if latest.done:
+                later = repeat_dates(latest.start, rule, max(today, latest.start) + timedelta(days=800))
+                start = next((d for d in later if d >= today), today)
+            self.create_event(todo_values(title, latest.description, start, rule, cal_id))
+            result = "created"
+        if not latest.done:
+            self.delete_task(latest)
+        return result
 
     def create_task(self, list_id, title, notes, due, done=False):
         item = self._call(self._tasks().tasks().insert(tasklist=list_id, body=self._task_body(title, notes, due, done)))

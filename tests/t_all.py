@@ -287,8 +287,8 @@ a.apply_theme("DesktopCal 기본")
 a.cfg["task_repeats"] = {"L1|화분 물 주기": "weekly", "L1|월세": "yearly"}
 n = a.import_settings_file(str(SP / "backup.json"))
 check("설정 백업→복원", a.cfg["cell_bg"] == "#ffffff" and n > 30 and "geometry" not in __import__("json").loads((SP / "backup.json").read_text("utf-8")))
-check("설정 가져오기: 할 일 반복 규칙은 덮어쓰지 않고 합침(같은 할 일은 백업 쪽)",
-      a.cfg["task_repeats"] == {"L1|화분 물 주기": "weekly", "L1|월세": "monthly"}, a.cfg["task_repeats"])
+check("설정 가져오기: 예전 반복 할 일 기억은 가져오지 않음(구글 반복 일정으로 옮긴 것을 또 옮기지 않게)",
+      a.cfg["task_repeats"] == {"L1|화분 물 주기": "weekly", "L1|월세": "yearly"}, a.cfg["task_repeats"])
 a.cfg["task_repeats"] = {}
 a.apply_theme("DesktopCal 기본")
 

@@ -599,9 +599,8 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
             # 드라이브 동기화를 켜 두었으면 다시 살아나 결과가 달라진다). 같은 트래커는 바꾼 시각과 상관없이 백업 쪽.
             ids = {t["id"] for t in imported}
             values["mood_trackers"] = imported + [t for t in self.cfg["mood_trackers"] if t["id"] not in ids]
-        if isinstance(values.get("task_repeats"), dict):
-            # 할 일 반복 규칙은 이 PC에만 있는 기록이라 통째로 바꾸지 않고 합친다(같은 할 일은 백업 쪽)
-            values["task_repeats"] = {**self.cfg["task_repeats"], **values["task_repeats"]}
+        # 예전 반복 할 일 기억은 가져오지 않는다(이미 구글 반복 일정으로 옮겼으면 또 옮겨 두 벌이 생긴다)
+        values.pop("task_repeats", None)
         self.import_settings(values)
         if isinstance(colors, dict):
             self.import_cell_colors(colors)

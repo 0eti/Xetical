@@ -93,6 +93,8 @@ class SyncMixin:
             except OSError:
                 log.exception("캐시 저장 실패")
             self._refresh_cards()
+            if self.cfg["task_repeats"] and tasks_status == "ok":  # 예전 반복 할 일은 한 번 옮긴다
+                self._migrate_repeats()
             self._auto_delay()
             self._reselect()
             self.sync_moods()

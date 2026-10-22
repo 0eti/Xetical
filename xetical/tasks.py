@@ -1,14 +1,14 @@
 """할 일(구글 Tasks)과 반복 할 일. 구글은 반복 할 일의 다음 회차를 만들어 주지 않아서 여기서 만든다.
 App이 상속해서 쓴다(self는 App)."""
 import calendar as pycal
-from datetime import timedelta
+from datetime import date, timedelta
 
 from PySide6.QtWidgets import QMessageBox
 
 from .dialogs import TaskDialog, ask_scope, repeat_dates
 from .jobs import new_tmp
 from .model import KEEP, Event
-from .todos import rule_of, todo_rrule, todo_values
+from .todos import TODO_RULES, rule_of, todo_rrule, todo_values
 from .widgets import confirm as ask_confirm
 from .widgets import play_sound
 
@@ -190,6 +190,26 @@ class TaskMixin:
                         done=v["done"], line=False, todo=True, recurrence=rec)
             self.outbox.add("update_event", ev, vals, scope, label="반복 할 일 수정")
         self.sync()
+
+    def _migrate_repeats(self):
+        """예전 반복 할 일(규칙은 이 PC 설정 task_repeats에만 있었다)을 구글 캘린더 반복 일정으로 한 번 옮긴다.
+        작업은 보낼 편지함에 남으므로 기억은 바로 지운다(껐다 켜도 이어지고, 두 번 옮기지 않는다)."""
+        cal = self.default_calendar()
+        reps = self.cfg["task_repeats"]
+        if not cal or not reps:
+            return
+        today = date.today()
+        moved = 0
+        for key, rule in reps.items():
+            list_id, _, title = key.partition("|")
+            if rule in TODO_RULES and title:
+                self.outbox.add("migrate_repeat", list_id, title, rule, cal, today, label="반복 할 일 옮기기")
+                moved += 1
+        self.cfg["task_repeats"] = {}
+        self.cfg.save()
+        self._project_task_repeats()
+        if moved:
+            self.flash(f"반복 할 일 {moved}개를 구글 캘린더 반복 일정으로 옮겨요")
 
     @staticmethod
     def _task_key(list_id, title):

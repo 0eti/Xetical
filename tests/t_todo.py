@@ -473,4 +473,67 @@ a.move_event(todo_ev("rt_20270205", FRI + timedelta(days=21)), 2)
 mv = jobs_named("move_event")
 check("4 끌어서 옮기기는 그 회차만, 묻지 않음", asked == [] and mv[-1][0].id == "rt_20270205" and mv[-1][1] == 2)
 
+# ---------- 5: 지금 있는 반복 할 일 자동으로 옮기기 ----------
+import json
+
+TODAY = date(2027, 1, 20)
+
+
+def task_item(tid, due, done=False, title="손톱 깎기", notes=""):
+    return {"id": tid, "title": title, "notes": notes, "due": f"{due.isoformat()}T00:00:00.000Z",
+            "status": "completed" if done else "needsAction"}
+
+
+def mig(items, series=False):
+    g, svc = fresh()
+    svc.task_items = lambda kw: items
+    svc.lists = lambda kw: ([{"id": "s1", "summary": "손톱 깎기", "recurrence": [RULE]}]
+                            if series and kw.get("privateExtendedProperty") == "xeticalTodo=1" else [])
+    return g, svc
+
+
+def deleted(svc):
+    return [kw["task"] for kw in svc.calls("tasks.delete")]
+
+
+g, svc = mig([task_item("new_task_id", FRI, notes="메모"), task_item("old", date(2027, 1, 8), done=True)])
+r = g.migrate_repeat("L1", "손톱 깎기", "weekly", "me", TODAY)
+ins = svc.calls("events.insert")
+check("5 미완료 최신 회차부터 시작하고 그 할 일은 지움(지난 완료 기록은 둠)", r == "created" and len(ins) == 1
+      and ins[0]["body"]["start"] == {"date": "2027-01-15"} and ins[0]["body"]["recurrence"] == [RULE]
+      and private(ins[0]["body"]).get("xeticalTodo") == "1" and ins[0]["body"]["description"] == "메모"
+      and ins[0]["calendarId"] == "me" and deleted(svc) == ["new_task_id"], (r, ins, deleted(svc)))
+check("5 할 일은 날짜 제한 없이 찾음", svc.calls("tasks.list")
+      and all("dueMin" not in kw and "dueMax" not in kw and kw["tasklist"] == "L1" for kw in svc.calls("tasks.list")))
+g, svc = mig([task_item("done1", date(2026, 8, 7), done=True)])
+r = g.migrate_repeat("L1", "손톱 깎기", "weekly", "me", TODAY)
+ins = svc.calls("events.insert")
+check("5 최신이 완료면 오늘 이후 첫 회차부터, 할 일은 안 지움", r == "created"
+      and ins[0]["body"]["start"] == {"date": "2027-01-22"} and deleted(svc) == [], (ins, deleted(svc)))
+g, svc = mig([task_item("other", FRI, title="장보기")])
+check("5 그 제목의 할 일이 없으면 아무것도 안 만듦",
+      g.migrate_repeat("L1", "손톱 깎기", "weekly", "me", TODAY) == "none" and not svc.calls("events.insert"))
+g, svc = mig([task_item("new_task_id", FRI)], series=True)
+r = g.migrate_repeat("L1", "손톱 깎기", "weekly", "me", TODAY)
+check("5 (Review 3) 이미 옮긴 반복 일정이 있으면 다시 만들지 않고 할 일만 지움(다른 PC·다시 보내기)",
+      r == "exists" and not svc.calls("events.insert") and deleted(svc) == ["new_task_id"], (r, svc.log))
+
+pump(lambda: len(a.outbox) == 0)
+a.cfg["task_repeats"] = {"L1|손톱 깎기": "weekly", "L1|월세 납부일": "monthly"}
+a._on_synced((CALS, [], {}, RANGE, [], "scope"), None)
+check("5 할 일을 못 읽은 동기화에서는 옮기지 않음", len(a.cfg["task_repeats"]) == 2)
+n = len(jobs_named("migrate_repeat"))
+a._on_synced((CALS, [], {}, RANGE, [], "ok"), None)
+m = jobs_named("migrate_repeat")[n:]
+check("5 첫 동기화 때 한 번 옮기고 예전 기억은 지움",
+      sorted(x[:4] for x in m) == [("L1", "손톱 깎기", "weekly", "me"), ("L1", "월세 납부일", "monthly", "me")]
+      and all(x[4] == date.today() for x in m) and a.cfg["task_repeats"] == {}, (m, a.cfg["task_repeats"]))
+n = len(jobs_named("migrate_repeat"))
+a._on_synced((CALS, [], {}, RANGE, [], "ok"), None)
+check("5 다음 동기화에서는 다시 옮기지 않음", len(jobs_named("migrate_repeat")) == n)
+bk = SP / "old_backup.json"
+bk.write_text(json.dumps({"task_repeats": {"L1|손톱 깎기": "weekly"}}, ensure_ascii=False), "utf-8")
+a.import_settings_file(str(bk))
+check("5 예전 백업을 가져와도 반복 기억은 들어오지 않음(이미 옮긴 반복을 또 옮기지 않게)", a.cfg["task_repeats"] == {})
+
 print(f"\n{sum(ok for _, ok in results)}/{len(results)} 통과")
