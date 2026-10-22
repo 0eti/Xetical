@@ -592,6 +592,9 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
             # 가져온 트래커는 지금 바꾼 것으로 찍는다(아니면 드라이브의 더 나중 목록에 져서 다시 사라진다)
             values["mood_trackers"] = [dict(t, t=time.time()) for t in values["mood_trackers"]
                                        if isinstance(t, dict) and "id" in t]
+        if isinstance(values.get("task_repeats"), dict):
+            # 할 일 반복 규칙은 이 PC에만 있는 기록이라 통째로 바꾸지 않고 합친다(같은 할 일은 백업 쪽)
+            values["task_repeats"] = {**self.cfg["task_repeats"], **values["task_repeats"]}
         self.import_settings(values)
         if isinstance(colors, dict):
             self.import_cell_colors(colors)

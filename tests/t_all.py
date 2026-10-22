@@ -281,10 +281,15 @@ check("하루 상세 보기: 시간 일정·종일 일정 구분", any(e.id == "
 # ---------- 11. 테마·설정 백업 ----------
 a.apply_theme("밝은 종이")
 check("테마 적용", a.cfg["cell_bg"] == "#ffffff" and a.cfg["item_font"]["color"] == "#222222")
+a.cfg["task_repeats"] = {"L1|월세": "monthly"}
 a.export_settings(str(SP / "backup.json"))
 a.apply_theme("DesktopCal 기본")
+a.cfg["task_repeats"] = {"L1|화분 물 주기": "weekly", "L1|월세": "yearly"}
 n = a.import_settings_file(str(SP / "backup.json"))
 check("설정 백업→복원", a.cfg["cell_bg"] == "#ffffff" and n > 30 and "geometry" not in __import__("json").loads((SP / "backup.json").read_text("utf-8")))
+check("설정 가져오기: 할 일 반복 규칙은 덮어쓰지 않고 합침(같은 할 일은 백업 쪽)",
+      a.cfg["task_repeats"] == {"L1|화분 물 주기": "weekly", "L1|월세": "monthly"}, a.cfg["task_repeats"])
+a.cfg["task_repeats"] = {}
 a.apply_theme("DesktopCal 기본")
 
 # ---------- 12. 화면 밖 위치 보정 ----------
