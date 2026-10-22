@@ -13,7 +13,7 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaInMemoryUpload
 
 from .config import CLIENT_SECRET_PATH, TOKEN_PATH
-from .model import KEEP, NO_REPEAT, Event
+from .model import KEEP, NO_REPEAT, Event, parse_alarm
 from .mood import merge_sync
 
 SCOPES = [
@@ -163,15 +163,10 @@ def _series_values(ev, v, master):
 
 def google_reminders(v):
     """알림 설정을 구글 팝업 알림으로도 걸어 휴대폰에서도 울리게 한다(표현 가능한 것만)."""
-    alarm = v.get("alarm")
-    if not alarm:
+    a = parse_alarm(v.get("alarm"))
+    if not a:
         return None
-    try:
-        hm, adv = (alarm.split("|") + [""])[:2]
-        h, m = (int(x) for x in hm.split(":"))
-        days = [int(x) for x in adv.split(",") if x.strip()] or [0]
-    except ValueError:
-        return None
+    h, m, days = a
     mins = []
     for d in days:
         if v["all_day"]:
@@ -608,8 +603,8 @@ class GCal:
             moved = self._call(svc.events().move(calendarId=cal_id, eventId=ev_id, destination=v["calendar_id"]))
             cal_id, ev_id = v["calendar_id"], moved["id"]
         body = self._body(v, reset_reminders=bool(ev.alarm))
-        if v.get("recurrence") and not ev.recurring:  # 단일 일정을 반복 일정으로
-            body["recurrence"] = [v["recurrence"]]
+        if not ev.recurring and v.get("recurrence") is not KEEP:  # 단일 일정을 반복 일정으로(NO_REPEAT면 반복을 없앤다)
+            body["recurrence"] = [v["recurrence"]] if v["recurrence"] else []
         self._call(svc.events().patch(calendarId=cal_id, eventId=ev_id, body=body))
 
     def _update_series(self, ev, v):
@@ -744,7 +739,7 @@ class GCal:
             self._call(svc.events().delete(calendarId=ev.calendar_id, eventId=ev.id))
 
     def set_props(self, ev, **props):
-        """완료·글자색 같은 DesktopCal식 속성만 바꾼다."""
+        """완료·글자색 같은 DesktopCal식 속성만 바꾼다. 앱은 쓰지 않고 실제 구글 시험(t_google)이 회차를 표시할 때 쓴다."""
         cur = {"done": ev.done, "text_color": ev.text_color, "order": ev.order, "line": ev.line,
                "alarm": ev.alarm, "countdown": ev.countdown}
         cur.update(props)

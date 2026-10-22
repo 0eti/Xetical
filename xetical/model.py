@@ -14,6 +14,22 @@ NO_REPEAT = ""    # 반복 안 함(사용자가 직접 고름)
 COUNTDOWN_TYPES = {"countdown": "카운트다운", "birthday": "생일", "memorial": "기념일", "festival": "제전", "exam": "시험"}
 
 
+def parse_alarm(alarm):
+    """알림 "HH:MM|0,1,7"(알림 시각|며칠 전 목록) → (시, 분, [며칠 전…]). 형식이 틀리거나 범위를 벗어나면 None
+    (다른 기기가 써 둔 이상한 값 하나 때문에 알림 검사 전체가 멈추거나 저장이 실패하지 않게)."""
+    if not alarm:
+        return None
+    try:
+        hm, adv = (alarm.split("|") + [""])[:2]
+        h, m = (int(x) for x in hm.split(":"))
+        days = [int(x) for x in adv.split(",") if x.strip() != ""] or [0]
+    except ValueError:
+        return None
+    if not (0 <= h < 24 and 0 <= m < 60) or not all(0 <= d <= 3660 for d in days):
+        return None
+    return h, m, days
+
+
 @dataclass
 class Event:
     id: str
@@ -89,15 +105,7 @@ class Event:
 
     def alarm_parts(self):
         """(시, 분, [며칠 전…]) 또는 None"""
-        if not self.alarm:
-            return None
-        try:
-            hm, adv = (self.alarm.split("|") + [""])[:2]
-            h, m = (int(x) for x in hm.split(":"))
-            days = [int(x) for x in adv.split(",") if x.strip() != ""] or [0]
-            return h, m, days
-        except ValueError:
-            return None
+        return parse_alarm(self.alarm)
 
     def countdown_parts(self):
         if not self.countdown:

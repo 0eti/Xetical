@@ -6,10 +6,10 @@ from datetime import timedelta
 from PySide6.QtGui import QGuiApplication
 
 from .dialogs import EventDialog, ask_scope, bring_to_front, rule_dates
-from .editor import CellEditor, line_text
+from .editor import CellEditor, line_alarm, line_text
 from .gcal import event_props
 from .jobs import new_tmp
-from .model import Event
+from .model import NO_REPEAT, Event
 from .widgets import confirm as ask_confirm
 
 UNDO_LIMIT = 50
@@ -74,7 +74,8 @@ class EditMixin:
         ed = CellEditor(self.cfg, self.store, day, rect, self.default_calendar(), self.cfg["recent_colors"])
         ed.committed.connect(self.apply_cell)
         ed.openEvent.connect(self.edit_event)
-        ed.newStructured.connect(lambda d, kind, title: self.new_event(d, kind, title=title))
+        ed.newStructured.connect(lambda d, kind, title, removed: self.new_event(d, kind, title=title,
+                                                                               restore_line=removed))
         ed.cellColorPicked.connect(self.set_cell_color)
         ed.destroyed.connect(lambda *_: setattr(self, "_editor", None))
         self._editor = ed
@@ -126,7 +127,8 @@ class EditMixin:
         if inverse:
             self.push_undo("칸 편집", [("apply_ops", [inverse], inv_tmps)])
 
-    def new_event(self, day, focus=None, start_time=None, title=""):
+    def new_event(self, day, focus=None, start_time=None, title="", restore_line=False):
+        """restore_line: 칸 편집기에서 뺀 새 줄의 글자(title)로 연 창이다. 취소하면 그 줄을 한 줄 일정으로 되살린다."""
         if self._need_login():
             return
         dlg = EventDialog(self.store.calendars, day=day, default_cal=self.default_calendar(), focus=focus,
@@ -143,7 +145,24 @@ class EditMixin:
             self.outbox.add("create_event", v, tmps=[tmp], label="새 일정")
             self.push_undo("새 일정", [("delete_event", [ev, "one"], [])])
         dlg.accepted.connect(done)
+        if restore_line and title:
+            dlg.rejected.connect(lambda: self._add_line(day, title))
         self._keep(dlg)
+
+    def _add_line(self, day, title):
+        """칸 편집기의 한 줄 일정을 만든다(반복·알림 창을 취소해 칸에서 뺀 줄을 되살릴 때)."""
+        cal = self.default_calendar()
+        if not cal:
+            return
+        order = len([e for e in self.store.on_day(day, lambda _c: True) if e.is_line_candidate])
+        v = {"title": title, "all_day": True, "start": day, "end": day, "calendar_id": cal, "done": False,
+             "text_color": "", "order": order, "line": True, "alarm": line_alarm(self.cfg), "countdown": "",
+             "description": "", "location": ""}
+        tmp = new_tmp()
+        ev = self._event_from_values(tmp, v)
+        self._add_temp(ev)
+        self.outbox.add("create_event", v, tmps=[tmp], label="칸 편집")
+        self.push_undo("칸 편집", [("delete_event", [ev, "one"], [])])
 
     def _add_temp_repeats(self, ev, rule):
         """새 반복 일정의 다음 회차들도 바로 보여 준다. 진짜 회차는 다음 동기화 때 구글에서 받아 바뀐다
@@ -195,7 +214,10 @@ class EditMixin:
                 if scope == "one" and v["calendar_id"] == ev.calendar_id:
                     after = self._event_from_values(ev.id, v)
                     after.recurring, after.recurring_event_id = ev.recurring, ev.recurring_event_id
-                    self.push_undo("일정 수정", [("update_event", [after, ev.values(), "one"], [])])
+                    before = ev.values()
+                    if v.get("recurrence") and not ev.recurring:  # 한 번짜리를 반복으로 바꿨으면 되돌릴 때 반복을 없앤다
+                        before["recurrence"] = NO_REPEAT
+                    self.push_undo("일정 수정", [("update_event", [after, before, "one"], [])])
                 self.sync()
             elif dlg.action == "delete":
                 self.delete_event(ev)

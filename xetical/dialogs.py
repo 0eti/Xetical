@@ -456,14 +456,14 @@ class EventDialog(QDialog):
             self.repeat.kind.setCurrentIndex(self.repeat.kind.findData("weekly"))
         elif focus == "alarm":
             self.alarm.setChecked(True)
+        elif focus == "countdown":
+            self.countdown.setChecked(True)
         if not event and cfg.get("default_alarm_on"):  # 새 일정 기본 알림(3-4)
             self.alarm.setChecked(True)
             hh, mm = (int(x) for x in cfg.get("default_alarm_time", "09:00").split(":"))
             self.alarm.time.setTime(QTime(hh, mm))
             for days, cb in self.alarm.checks:
                 cb.setChecked(days in cfg.get("default_alarm_days", [0]))
-        elif focus == "countdown":
-            self.countdown.setChecked(True)
 
         form = QFormLayout()
         top = QHBoxLayout()

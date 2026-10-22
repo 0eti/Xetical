@@ -34,6 +34,7 @@ from .tasks import TaskMixin
 from .themes import PRESETS, capture, theme_values
 from .view import CalendarWindow
 from .widgets import app_icon, apply_ui_theme, color_menu, swatch_icon
+from .widgets import confirm as ask_confirm
 
 log = logging.getLogger("xetical")
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -54,16 +55,18 @@ class Worker(QObject):
     def __init__(self):
         super().__init__()
         self._pool = ThreadPoolExecutor(1, thread_name_prefix="gcal")
+        self._side = ThreadPoolExecutor(1, thread_name_prefix="login")
         self._done.connect(self._deliver)
 
-    def submit(self, fn, *args, callback=None):
+    def submit(self, fn, *args, callback=None, side=False):
+        """side=True: 줄과 따로 실행한다(브라우저 로그인처럼 오래 기다리는 일이 동기화·보내기를 막지 않게)."""
         def finished(fut):
             try:
                 res, err = fut.result(), None
             except Exception as e:  # noqa: BLE001 - UI에 그대로 전달
                 res, err = None, e
             self._done.emit(callback, res, err)
-        self._pool.submit(fn, *args).add_done_callback(finished)
+        (self._side if side else self._pool).submit(fn, *args).add_done_callback(finished)
 
     def _deliver(self, callback, res, err):
         if err and not isinstance(err, (AuthError, ApiDisabledError)) and not is_offline(err):
@@ -90,6 +93,7 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
         self.gcal.want_drive = self.cfg["mood_sync"]
         self.worker = Worker()
         self.outbox = Outbox(self.gcal, self.worker)
+        self.outbox.keep_ids = lambda: [item["jobs"] for item in self.undo_stack]
         self.store = EventStore()
         self.store.load_cache()
         self.cell_colors = load_json(CELLS_PATH, {})
@@ -668,6 +672,8 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
         except (OSError, ValueError) as e:
             QMessageBox.warning(None, "Xetical", f"올바른 파일이 아닙니다.\n{e}")
             return
+        if self.gcal.has_token() and not self.logout():  # 다른 프로젝트·계정일 수 있어 지금 계정에서 나간다
+            return
         shutil.copyfile(path, CLIENT_SECRET_PATH)
         self.gcal.logout()
         self.login()
@@ -680,7 +686,7 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
             return
         self._logging_in = True
         self.set_status("브라우저에서 구글 로그인을 완료해 주세요…")
-        self.worker.submit(self.gcal.login, callback=self._on_login)
+        self.worker.submit(self.gcal.login, callback=self._on_login, side=True)
 
     def _on_login(self, _, err):
         self._logging_in = False
@@ -693,6 +699,14 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
             self.sync()
 
     def logout(self):
+        """로그아웃. 보내지 못한 변경이 있으면 버려도 되는지 묻는다(남겨 두면 다음에 로그인한 계정으로 간다).
+        로그아웃했으면 True."""
+        if len(self.outbox) and not ask_confirm(
+                None, f"구글에 아직 보내지 못한 변경이 {len(self.outbox)}개 있습니다.\n"
+                      "로그아웃하면 이 변경은 버려집니다. 로그아웃할까요?", yes="로그아웃"):
+            return False
+        self.outbox.clear()
+        self.undo_stack.clear()  # 되돌리기도 이 계정의 일정을 가리킨다
         self.gcal.logout()
         self.store.set([], [], {}, None)
         self.win.countdowns = []
@@ -701,6 +715,7 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
         self._last_sync = None
         self.win.cloud_state = "login"
         self.set_status("구글 로그인 필요 — 여기를 클릭", True)
+        return True
 
     # ---------- 공용 도우미 ----------
     def _keep(self, dlg):

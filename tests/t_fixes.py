@@ -543,11 +543,11 @@ pump(lambda: len(a.outbox) == 0)
 ed5 = CellEditor(a.cfg, a.store, T + timedelta(days=9), QRect(0, 0, 160, 120), "me", [])
 ed5.edit.setPlainText("월세 납부일")
 got5 = []
-ed5.newStructured.connect(lambda d, kind, title: got5.append((kind, title)))
+ed5.newStructured.connect(lambda d, kind, title, removed: got5.append((kind, title, removed)))
 committed5 = []
 ed5.committed.connect(lambda day, ops, lines, series: committed5.append(ops))
 ed5._structured("repeat")
-check("M ↻: 커서 줄 글자를 새 일정 창 제목으로 넘김", got5 == [("repeat", "월세 납부일")], got5)
+check("M ↻: 커서 줄 글자를 새 일정 창 제목으로 넘김", got5 == [("repeat", "월세 납부일", True)], got5)
 check("M ↻: 저장 안 한 새 줄은 한 줄 일정으로 만들지 않음", not any(op[0] == "create" for ops in committed5 for op in ops), committed5)
 
 print(f"\n{sum(ok for _, ok in results)}/{len(results)} 통과")

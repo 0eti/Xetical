@@ -121,6 +121,7 @@ class CalendarWindow(QWidget):
         self._allow_z = False
         self._event_hits, self._check_hits, self._date_hits, self._cells = [], [], [], []
         self._scroll = {}        # date -> 셀 내용 스크롤(px)
+        self._scroll_max = {}    # date -> 그 칸을 끝까지 내렸을 때의 스크롤(그릴 때 잰다)
         self._overflow = set()
         self._hover_btn = self._hover_day = self._tip = None
         self._drag = None
@@ -416,6 +417,7 @@ class CalendarWindow(QWidget):
         s, m = L["s"], L["m"]
         base = self.cfg["cell_bg"]
         self._event_hits, self._check_hits, self._date_hits, self._cells, self._overflow = [], [], [], [], set()
+        self._scroll_max = {}
 
         if m:  # 그림자
             for i in range(m, 0, -1):
@@ -444,13 +446,23 @@ class CalendarWindow(QWidget):
 
         bars = self._row_bars(L)
         bar_h = QFontMetrics(make_font(self.cfg["item_font"], 0.9)).height() + 2 * s
+        # 칸 높이에 들어가는 막대 줄 수. 못 그린 막대는 그 칸의 '…외 N개'에 더한다(아무 표시 없이 사라지지 않게)
+        fits, hidden = {}, {}
+        for r, (lanes, placed) in bars.items():
+            c = self._cell_rect(L, r * L["cols"])
+            fits[r] = sum(1 for lane in range(lanes)
+                          if self._bar_top(c, date_font, s, lane, bar_h) + bar_h <= c.bottom() - 2)
+            for _ev, i0, i1, lane in placed:
+                if lane >= fits[r]:
+                    for i in range(i0, i1 + 1):
+                        hidden[i] = hidden.get(i, 0) + 1
         today = date.today()
         for i in range(L["rows"] * L["cols"]):
             d = L["first"] + timedelta(days=i)
             cell = self._cell_rect(L, i)
             self._cells.append((cell, d))
-            lanes = bars.get(i // L["cols"], (0, []))[0]
-            self._paint_cell(p, L, d, cell, today, date_font, lanes * (bar_h + 1 * s))
+            lanes = fits.get(i // L["cols"], 0)
+            self._paint_cell(p, L, d, cell, today, date_font, lanes * (bar_h + 1 * s), hidden.get(i, 0))
             if L["wn_w"] and i % L["cols"] == 0:
                 wr = QRectF(m, cell.top(), L["wn_w"], cell.height())
                 p.setFont(make_font(self.cfg["date_font"], 0.85, bold=False))
@@ -512,7 +524,7 @@ class CalendarWindow(QWidget):
                 p.drawRoundedRect(r, 4 * s, 4 * s)
             self._draw_icon(p, key, r, s)
 
-    def _paint_cell(self, p, L, d, cell, today, date_font, bars_h):
+    def _paint_cell(self, p, L, d, cell, today, date_font, bars_h, hidden_bars=0):
         s = L["s"]
         holiday = self.store.holiday_names(d, self.cfg["show_holidays"], self.cfg["show_observances"])
         public = self.store.holiday_names(d, True, False) if self.cfg["show_holidays"] else []
@@ -579,7 +591,7 @@ class CalendarWindow(QWidget):
                                                                          int(hr.width())))
         if self.cfg["show_content"]:
             top_y = y + lh + 2 * s + bars_h
-            self._paint_items(p, L, d, cell, QRectF(x, top_y, w, cell.bottom() - pad - top_y))
+            self._paint_items(p, L, d, cell, QRectF(x, top_y, w, cell.bottom() - pad - top_y), hidden_bars)
         p.setOpacity(1.0)
 
     def item_text(self, ev, d):
@@ -608,15 +620,16 @@ class CalendarWindow(QWidget):
             return ev.color
         return self.cfg["item_font"]["color"]
 
-    def _paint_items(self, p, L, d, cell, area):
+    def _paint_items(self, p, L, d, cell, area, hidden_bars=0):
+        """hidden_bars: 칸에 자리가 없어 그리지 못한 여러 날 막대 수('…외 N개'에 더한다)."""
         s = L["s"]
         events = [e for e in self.cell_events(d) if not (self._uses_bars() and e.is_multi_day)]
-        if not events or area.height() <= 0:
+        if not (events or hidden_bars) or area.height() <= 0:
             return
         limit = self.cfg["max_items"]
-        hidden = 0
+        hidden = hidden_bars
         if limit and len(events) > limit:
-            hidden = len(events) - limit
+            hidden += len(events) - limit
             events = events[:limit]
         font = make_font(self.cfg["item_font"])
         fm = QFontMetrics(font)
@@ -669,6 +682,7 @@ class CalendarWindow(QWidget):
             ey += lh
         p.restore()
         total = ey + offset - area.top()
+        self._scroll_max[d] = max(0, total - area.height())
         if total > area.height() + 1:
             self._overflow.add(d)
             if d == self._hover_day:  # 자동 숨김 스크롤바
@@ -688,11 +702,10 @@ class CalendarWindow(QWidget):
         s = L["s"]
         font = make_font(self.cfg["item_font"], 0.9)
         fm = QFontMetrics(font)
-        top_off = 3 * s - 1 + QFontMetrics(date_font).height() + 2 * s
         for r, (_n, placed) in bars.items():
             for ev, i0, i1, lane in placed:
                 c0, c1 = self._cell_rect(L, i0), self._cell_rect(L, i1)
-                y = c0.top() + top_off + lane * (bar_h + 1 * s)
+                y = self._bar_top(c0, date_font, s, lane, bar_h)
                 if y + bar_h > c0.bottom() - 2:
                     continue  # 칸에 자리가 없으면 그리지 않는다
                 rect = QRectF(c0.left() + 2 * s, y, c1.right() - c0.left() - 4 * s, bar_h)
@@ -718,6 +731,11 @@ class CalendarWindow(QWidget):
                            fm.elidedText(text, Qt.ElideRight, int(rect.width() - 8 * s)))
                 p.setOpacity(1.0)
                 self._event_hits.append((rect, ev))
+
+    @staticmethod
+    def _bar_top(cell, date_font, s, lane, bar_h):
+        """여러 날 막대 줄(lane)의 위쪽 y: 날짜 숫자 줄 바로 아래부터 쌓는다."""
+        return cell.top() + 3 * s - 1 + QFontMetrics(date_font).height() + 2 * s + lane * (bar_h + 1 * s)
 
     def _paint_drag(self, p, L):
         if not (self._drag and self._drag.get("active")):
@@ -1068,7 +1086,9 @@ class CalendarWindow(QWidget):
         d = self._day_at(pos)
         if d in self._overflow or self._scroll.get(d):  # 셀 내용이 넘치면 그 셀만 스크롤
             step = QFontMetrics(make_font(self.cfg["item_font"])).height()
-            self._scroll[d] = max(0, self._scroll.get(d, 0) + (-step if dy > 0 else step))
+            # 끝까지 내렸으면 더 내려가지 않는다(내용이 모두 위로 빠져 빈 칸이 되지 않게)
+            want = self._scroll.get(d, 0) + (-step if dy > 0 else step)
+            self._scroll[d] = min(self._scroll_max.get(d, 0), max(0, want))
             self.update()
         elif self.cfg["wheel_paging"]:
             if self.mode == "month":  # 전체 월은 1일을 기준으로 그리므로 주 단위로 밀면 칸이 어긋난다 → 한 달씩

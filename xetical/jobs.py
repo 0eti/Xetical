@@ -62,6 +62,17 @@ def resolve(o, id_map):
     return o
 
 
+def tmp_ids(o):
+    """구조(encode한 것) 안에 든 임시 id(tmp-…) 문자열들."""
+    if isinstance(o, str):
+        return {o} if o.startswith("tmp-") else set()
+    if isinstance(o, dict):
+        return set().union(*map(tmp_ids, o.values()))
+    if isinstance(o, list):
+        return set().union(*map(tmp_ids, o))
+    return set()
+
+
 def new_tmp():
     return f"tmp-{uuid.uuid4().hex[:12]}"
 
@@ -124,14 +135,17 @@ class Outbox(QObject):
         self.jobs = [upgrade_job(j) for j in data.get("jobs", [])]
         self.id_map = data.get("ids", {})
         self.busy = False
+        self.keep_ids = lambda: []  # 짝을 버리면 안 되는 다른 곳(되돌리기)의 작업들. app이 넣어 준다
         self.retry = QTimer(self, singleShot=True, interval=RETRY_MS, timeout=self.process)
 
     def __len__(self):
         return len(self.jobs)
 
     def _save(self):
-        if len(self.id_map) > 500:  # 오래된 짝은 버린다
-            self.id_map = dict(list(self.id_map.items())[-300:])
+        if len(self.id_map) > 500:  # 오래된 짝은 버리되, 아직 보낼 작업·되돌리기가 가리키는 임시 id의 짝은 남긴다
+            keep = tmp_ids(self.jobs) | tmp_ids(encode(self.keep_ids()))
+            items = list(self.id_map.items())
+            self.id_map = {k: v for i, (k, v) in enumerate(items) if i >= len(items) - 300 or k in keep}
         save_json(OUTBOX_PATH, {"jobs": self.jobs, "ids": self.id_map})
 
     def add(self, op, *args, tmps=(), label=""):
@@ -143,6 +157,13 @@ class Outbox(QObject):
         self._save()
         self.changed.emit()
         self.process()
+
+    def clear(self):
+        """로그아웃: 이 계정에 보내려던 변경과 임시 id 짝을 버린다(다른 계정으로 보내지 않게)."""
+        self.jobs, self.id_map = [], {}
+        self.retry.stop()
+        self._save()
+        self.changed.emit()
 
     def real_id(self, any_id):
         return self.id_map.get(any_id, any_id)

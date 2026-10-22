@@ -131,10 +131,6 @@ class MoodData:
                 self.days.setdefault(tracker_id, {})[d] = [color, now]
         self._save()
 
-    def replace(self, days):
-        self.days = days
-        self._save()
-
 
 def active_tracker(cfg):
     trackers = cfg["mood_trackers"]
@@ -264,6 +260,3 @@ class MoodPanel:
             if r.contains(pos):
                 return "box", d
         return None
-
-    def contains(self, pos):
-        return any(r.contains(pos) for r, _ in self.tabs) or any(r.contains(pos) for r, _ in self.boxes)

@@ -25,6 +25,13 @@ def line_text(title):
     return " ".join(title.split())
 
 
+def line_alarm(cfg):
+    """칸 편집기로 만든 줄에 걸 기본 알림('칸 편집기로 만든 줄에도 적용'을 켰을 때만)."""
+    if cfg["default_alarm_on"] and cfg["default_alarm_lines"]:
+        return f"{cfg['default_alarm_time']}|{','.join(str(x) for x in cfg['default_alarm_days'])}"
+    return ""
+
+
 class _Line:
     """한 줄의 상태. block.userState()가 이 목록의 번호를 가리킨다."""
 
@@ -42,7 +49,8 @@ class LineEdit(QTextEdit):
 class CellEditor(QWidget):
     committed = Signal(object, list, list, list)  # date, ops, 화면에 바로 반영할 줄 목록, 반복 일정 전체·이후 작업
     openEvent = Signal(object)                 # 위쪽 목록의 일정 편집
-    newStructured = Signal(object, str, str)   # date, 'repeat' | 'alarm' | 'countdown', 제목(커서 줄 글자)
+    newStructured = Signal(object, str, str, bool)  # date, 'repeat' | 'alarm' | 'countdown', 제목(커서 줄 글자),
+    #                                                 칸에서 뺀 새 줄인가(창을 취소하면 한 줄 일정으로 되살린다)
     cellColorPicked = Signal(object, str)      # date, 색('' = 없음)
 
     def __init__(self, cfg, store, day, cell_rect, default_cal, recent_colors):
@@ -304,9 +312,7 @@ class CellEditor(QWidget):
                     ln["ev"] = match
                     orphans.remove(match)
         ops, ask = [], []
-        alarm = ""
-        if self.cfg["default_alarm_on"] and self.cfg["default_alarm_lines"]:
-            alarm = f"{self.cfg['default_alarm_time']}|{','.join(str(x) for x in self.cfg['default_alarm_days'])}"
+        alarm = line_alarm(self.cfg)
         # 무엇이든 바뀌었으면 순서 번호를 모두 새로 매긴다(휴대폰에서 만든 일정은 번호가 모두 0이라, 이름만 바꿔도
         # 제목순으로 다시 섞인다). 열었다 닫기만 했으면 구글에 쓰지 않는다.
         changed = [ln["ev"].id if ln["ev"] else None for ln in lines] != [e.id for e in self.line_events] or any(
@@ -379,7 +385,7 @@ class CellEditor(QWidget):
     def _structured(self, kind):
         """반복·알림·카운트다운 추가: 커서 줄의 글자를 새 일정 창의 제목으로 넘긴다. 아직 저장하지 않은 새 줄이면
         그 줄은 칸에서 뺀다(같은 날에 한 줄 일정과 반복 일정이 둘 다 생기지 않게)."""
-        title = ""
+        title, removed = "", False
         blocks = self._current_lines()
         if blocks:
             b = blocks[0]
@@ -388,8 +394,9 @@ class CellEditor(QWidget):
                 cur = QTextCursor(b)
                 cur.movePosition(QTextCursor.EndOfBlock, QTextCursor.KeepAnchor)
                 cur.removeSelectedText()
+                removed = True
         self.save_and_close()
-        self.newStructured.emit(self.day, kind, title)
+        self.newStructured.emit(self.day, kind, title, removed)
 
     def changeEvent(self, e):
         super().changeEvent(e)

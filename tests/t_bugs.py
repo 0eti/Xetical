@@ -555,4 +555,144 @@ a.import_settings_file(str(path))
 names = {t["id"]: t["name"] for t in a.cfg["mood_trackers"]}
 check("R9 이 PC 트래커의 바꾼 시각이 더 나중이어도 백업 쪽", names == {"mood": "기분(백업)"}, names)
 
+# ================================================================ 전체 코드 리뷰(2026-10-22)에서 고친 것
+from xetical.dialogs import EventDialog
+from xetical.gcal import google_reminders
+from xetical.model import NO_REPEAT
+
+# ---------- F1: '새 일정 기본 알림'을 켜도 ⏳(카운트다운 추가)는 카운트다운을 켠 채로 연다 ----------
+a.cfg["default_alarm_on"] = True
+dlg = EventDialog(CALS, day=T, default_cal="me", focus="countdown", cfg=a.cfg)
+check("F1 기본 알림이 켜져 있어도 카운트다운 칸이 켜짐(기본 알림도 그대로)",
+      dlg.countdown.isChecked() and dlg.alarm.isChecked())
+dlg.deleteLater()
+a.cfg["default_alarm_on"] = False
+
+# ---------- F2: 한 번짜리를 반복으로 바꾼 것을 되돌리면 반복도 없앤다 ----------
+g, svc = fresh()
+single = Event("s1", "me", "운동", S0, S0 + timedelta(hours=1), False)
+g.update_event(single, vals(recurrence=NO_REPEAT), "one")
+check("F2 한 번짜리 일정에 '반복 안 함'을 보내면 반복 규칙을 지움",
+      svc.calls("events.patch")[0]["body"].get("recurrence") == [], svc.calls("events.patch"))
+g, svc = fresh()
+g.update_event(single, vals(), "one")
+check("F2 반복을 건드리지 않은 수정은 반복 규칙을 보내지 않음", "recurrence" not in svc.calls("events.patch")[0]["body"])
+a.store.set(CALS, [Event("one1", "me", "회의", T, T + timedelta(days=1), True)], {},
+            (T - timedelta(days=60), T + timedelta(days=90)))
+a._open_event_dialog(a.store.events[0], "")
+dlg = a._dialogs[-1]
+dlg.repeat.kind.setCurrentIndex(dlg.repeat.kind.findData("weekly"))
+dlg.action = "save"
+dlg.accepted.emit()
+undo_v = a.undo_stack[-1]["jobs"][0][1][1]
+check("F2 반복으로 바꾼 수정의 되돌리기는 '반복 안 함'을 보냄", undo_v["recurrence"] == NO_REPEAT, undo_v)
+dlg.close()
+pump(lambda: len(a.outbox) == 0)
+
+# ---------- F4: 칸 편집기에서 뺀 새 줄은 창을 취소하면 한 줄 일정으로 되살아남 ----------
+a.store.set(CALS, [], {}, (T - timedelta(days=60), T + timedelta(days=90)))
+a.new_event(D2, "alarm", title="치과 예약", restore_line=True)
+a._dialogs[-1].reject()
+lines_ = [e for e in a.store.events if e.title == "치과 예약"]
+check("F4 반복·알림 창을 취소하면 그 줄이 한 줄 일정으로 남음",
+      len(lines_) == 1 and lines_[0].line and lines_[0].all_day and lines_[0].first_day == D2, lines_)
+a.new_event(D2, "alarm", title="미용실", restore_line=True)
+a._dialogs[-1]._save()
+made = [e for e in a.store.events if e.title == "미용실"]
+check("F4 창을 저장하면 줄을 따로 만들지 않음(일정 하나만)", len(made) == 1 and not made[0].line, made)
+pump(lambda: len(a.outbox) == 0)
+
+# ---------- F5: 브라우저 로그인을 기다리는 동안에도 동기화·보내기 줄은 돈다 ----------
+import threading
+gate, got = threading.Event(), []
+a.worker.submit(gate.wait, 10, callback=lambda r, e: got.append("login"), side=True)
+a.worker.submit(lambda: "sync", callback=lambda r, e: got.append(r))
+pump(lambda: "sync" in got, 3)
+check("F5 로그인이 끝나지 않아도 다른 작업이 먼저 끝남", got == ["sync"], got)
+gate.set()
+pump(lambda: "login" in got, 3)
+
+# ---------- F6: 범위를 벗어난 알림 값 하나가 알림 검사 전체를 멈추지 않음 ----------
+check("F6 '24:00'·'9:60'·'09:00|-1'은 알림이 없는 것으로", all(
+    Event("x", "me", "t", T, T, True, alarm=al).alarm_parts() is None for al in ("24:00|0", "9:60|0", "09:00|-1")))
+check("F6 구글 팝업 알림도 같은 해석(이상한 값이면 걸지 않음)",
+      google_reminders({"alarm": "25:00|1", "all_day": True}) is None
+      and google_reminders({"alarm": "09:00|1", "all_day": True}) == {"useDefault": False,
+                                                                     "overrides": [{"method": "popup", "minutes": 900}]})
+a.store.events = [Event("bad", "me", "이상한 알림", T, T + timedelta(days=1), True, alarm="25:00|0"),
+                  Event("ok", "me", "약 먹기", T, T + timedelta(days=1), True, alarm=f"{hm}|0")]
+a.reminders.fired = set()
+try:
+    a.reminders.check()
+    err = None
+except ValueError as e:
+    err = e
+check("F6 이상한 알림이 있어도 다른 일정 알림은 뜸", err is None and len(a.reminders.popups) == 1, err)
+for p_ in list(a.reminders.popups):
+    p_.close()
+QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+a.store.events = []
+a.store.reindex()
+
+# ---------- F9: id 짝을 줄여도 대기 작업·되돌리기가 가리키는 임시 id는 남김 ----------
+ob = a.outbox
+saved_jobs, saved_map, saved_keep = ob.jobs, ob.id_map, ob.keep_ids
+ob.id_map = {f"tmp-old{i}": f"real{i}" for i in range(600)}
+ob.jobs = [{"op": "delete_event", "args": J.encode([Event("tmp-old3", "me", "t", T, T, True), "one"]), "tmps": [],
+            "label": "", "v": 2}]
+ob.keep_ids = lambda: [[("delete_event", [Event("tmp-old7", "me", "t", T, T, True), "one"], [])]]
+ob._save()
+check("F9 오래된 짝을 버려도 대기 작업·되돌리기가 쓰는 짝은 남음",
+      ob.id_map.get("tmp-old3") == "real3" and ob.id_map.get("tmp-old7") == "real7"
+      and "tmp-old8" not in ob.id_map and len(ob.id_map) == 302, len(ob.id_map))
+ob.jobs, ob.id_map, ob.keep_ids = saved_jobs, saved_map, saved_keep
+ob._save()
+
+# ---------- F7·F8: 좁은 칸의 여러 날 막대, 칸 스크롤 끝 ----------
+a.cfg["display_mode"], a.cfg["weeks"], a.cfg["span_bars"], a.cfg["passed_weeks"] = "rolling", 6, True, 0
+w.go_today()
+W0 = w.week_first(T)
+a.store.set(CALS, [Event(f"mb{k}", "me", f"여행{k}", W0, W0 + timedelta(days=3), True) for k in range(4)]
+            + [Event(f"it{k}", "me", f"할 일 {k}", W0, W0 + timedelta(days=1), True, order=k) for k in range(12)],
+            {}, (T - timedelta(days=60), T + timedelta(days=90)))
+seen_hidden = {}
+orig_items = w._paint_items
+
+
+def spy_items(p_, L_, d_, cell_, area_, hidden_bars=0):
+    seen_hidden[d_] = hidden_bars
+    return orig_items(p_, L_, d_, cell_, area_, hidden_bars)
+
+
+w._paint_items = spy_items
+w.resize(560, 330)
+w.grab()
+check("F7 좁은 칸: 그리지 못한 여러 날 막대는 그 칸의 '…외 N개'에 더함",
+      seen_hidden.get(W0, 0) > 0 and seen_hidden.get(W0 + timedelta(days=2), 0) > 0, seen_hidden.get(W0))
+w.resize(1400, 1400)
+seen_hidden.clear()
+w.grab()
+check("F7 넉넉한 칸: 막대를 모두 그리고 '…외'에 더하지 않음", seen_hidden.get(W0, 0) == 0, seen_hidden.get(W0))
+w._paint_items = orig_items
+w.resize(560, 330)
+w.grab()
+center = next(r for r, dd in w._cells if dd == W0).center()
+for _ in range(60):
+    w.on_wheel(center, -120)
+check("F8 칸 스크롤은 끝까지 내리면 더 내려가지 않음",
+      0 < w._scroll.get(W0, 0) == w._scroll_max.get(W0), (w._scroll.get(W0), w._scroll_max.get(W0)))
+w._scroll.clear()
+a.store.set(CALS, [], {}, (T - timedelta(days=60), T + timedelta(days=90)))
+
+# ---------- F3: 로그아웃하면 보내지 못한 변경을 (물어본 뒤) 버림 — 마지막에(화면 상태를 지운다) ----------
+C.CACHE_PATH = SP / "cache_logout.json"  # 진짜 data/cache.json을 지우지 않게
+A.config.CACHE_PATH = C.CACHE_PATH
+a.outbox.jobs.append({"op": "delete_event", "args": [], "tmps": [], "label": "x", "v": 2})
+a.push_undo("시험", [("delete_event", [], [])])
+A.ask_confirm = lambda *args, **kw: False
+check("F3 대기 변경이 있는데 '취소'하면 로그아웃하지 않음", a.logout() is False and len(a.outbox) == 1)
+A.ask_confirm = lambda *args, **kw: True
+check("F3 로그아웃하면 대기 변경·되돌리기를 버림(다음 계정으로 보내지 않게)",
+      a.logout() is True and len(a.outbox) == 0 and a.outbox.id_map == {} and a.undo_stack == [])
+
 print(f"\n{sum(ok for _, ok in results)}/{len(results)} 통과")
