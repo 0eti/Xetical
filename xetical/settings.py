@@ -577,10 +577,8 @@ class SettingsWindow(QWidget):
     def _page_tasks(self):
         p = Page()
         p.section("할 일")
-        p.row("할 일 표시", self.onoff("show_tasks"), hint="구글 할 일(Tasks) 중 마감일이 있는 것")
+        p.row("할 일 표시", self.onoff("show_tasks"), hint="구글 할 일(Tasks) 중 마감일이 있는 것과 반복 할 일")
         p.row("완료한 할 일 표시", self.onoff("show_done_tasks"))
-        p.row("반복 할 일 '예정' 표시", self.onoff("show_task_projection"),
-              hint="반복 할 일의 앞으로 날짜를 흐리게 보여 줍니다")
         p.section("새 일정 기본 알림")
         p.row("새 일정에 알림 걸기", self.onoff("default_alarm_on"), hint="일정 창에서 새로 만들 때 알림을 미리 켭니다")
         p.row("알림 시각", self._time_edit("default_alarm_time"))

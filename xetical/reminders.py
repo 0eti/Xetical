@@ -124,13 +124,13 @@ class Reminders(QObject):
             cfg["summary_last"] = today.isoformat()
             cfg.save()
         win = app.win
-        evs = [e for e in win.cell_events(today) if not e.virtual]
+        evs = win.cell_events(today)
         events = [e for e in evs if not e.task_list and not e.todo]
         tasks = [e for e in evs if (e.task_list or e.todo) and not e.done]
         # 지난 회차: 할 일은 모두, 반복 할 일은 지난 30일 안의 것만(오래전 놓친 회차가 요약을 채우지 않게)
         overdue = [e for e in app.store.events
                    if (e.task_list or (e.todo and e.first_day >= today - timedelta(days=30))) and not e.done
-                   and not e.virtual and e.first_day < today and win.visible_calendar(e.calendar_id)]
+                   and e.first_day < today and win.visible_calendar(e.calendar_id)]
         lines = []
         for e in events:
             lines.append(("• " + win.item_text(e, today), win.item_color(e)))

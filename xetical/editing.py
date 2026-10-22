@@ -38,12 +38,6 @@ class EditMixin:
             self.sync()
 
     # ---------- 일정 편집 ----------
-    def _real(self, ev):
-        """예정(가상) 할 일이면 진짜 할 일, 아니면 그대로."""
-        if ev is not None and ev.virtual:
-            return next((e for e in self.store.events if e.id == ev.source_id), None)
-        return ev
-
     def _add_temp(self, ev):
         self.store.events.append(ev)
         self.store.reindex()
@@ -181,9 +175,6 @@ class EditMixin:
     def edit_event(self, ev):
         if ev.id.startswith("tmp-"):
             return  # 아직 구글에 올라가는 중
-        ev = self._real(ev)  # 예정 표시를 누르면 실제 할 일(지금 차례)을 연다
-        if ev is None:
-            return
         if ev.task_list:
             self._open_task_dialog(ev)
         elif ev.recurring:  # 반복 규칙은 원본에서 읽어 와야 한다
@@ -252,7 +243,7 @@ class EditMixin:
 
     def move_event(self, ev, delta):
         """끌어서 다른 날로 옮기기(1-7)."""
-        if not delta or ev.virtual or ev.id.startswith("tmp-"):
+        if not delta or ev.id.startswith("tmp-"):
             return
         before = copy.copy(ev)
         d = timedelta(days=delta)
@@ -265,7 +256,7 @@ class EditMixin:
 
     # ---------- 복사·붙여넣기(2-4) ----------
     def copy_selected(self):
-        ev = self._real(self.win.selected_event)
+        ev = self.win.selected_event
         if ev is None:
             self.flash("복사할 일정을 먼저 눌러 선택하세요")
             return
@@ -274,14 +265,14 @@ class EditMixin:
         self.flash(f"복사: {ev.title}")
 
     def _removable_selection(self):
-        """Delete·Ctrl+X 대상. 우클릭 메뉴처럼 '예정'과 읽기 전용 일정은 지울 수 없다."""
+        """Delete·Ctrl+X 대상. 우클릭 메뉴처럼 읽기 전용 일정은 지울 수 없다."""
         sel = self.win.selected_event
         if sel is None:
             return None
-        if sel.virtual or not (sel.writable or sel.task_list):
-            self.flash("예정 표시나 읽기 전용 일정은 지울 수 없습니다" if sel.virtual else "읽기 전용 일정은 지울 수 없습니다")
+        if not (sel.writable or sel.task_list):
+            self.flash("읽기 전용 일정은 지울 수 없습니다")
             return None
-        return self._real(sel)
+        return sel
 
     def cut_selected(self):
         ev = self._removable_selection()

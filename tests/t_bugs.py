@@ -27,7 +27,6 @@ MD.MOODS_PATH = SP / "moods_b.json"
 import xetical.app as A
 A.CELLS_PATH = SP / "cells_b.json"
 A.MoodData = lambda: MD.MoodData(SP / "moods_b.json")
-from xetical.dialogs import repeat_dates
 from xetical.gcal import GCal
 from xetical.model import Event
 
@@ -338,30 +337,6 @@ ed.close()
 a.store.events = []
 a.store.reindex()
 
-# ---------- 3: 매월 31일 반복 할 일 ----------
-a.cfg["task_repeats"] = {"L1|월세": "monthly"}
-
-
-def task(tid, d, done=False):
-    return Event(f"task:L1:{tid}", "tasks:L1", "월세", d, d + timedelta(days=1), True, task_list="L1", done=done)
-
-
-a.store.set(CALS, [task("a", date(2027, 1, 31), True), task("b", date(2027, 2, 28))], {},
-            (date(2026, 12, 1), date(2027, 6, 1)))
-a._project_task_repeats()
-proj = sorted(e.first_day for e in a.store.events if e.virtual)
-check("3 2월 28일로 당겨진 31일 회차 뒤 예정은 다시 31일(말일)", proj == [date(2027, 3, 31), date(2027, 4, 30),
-                                                          date(2027, 5, 31)], proj)
-feb = next(e for e in a.store.events if e.id == "task:L1:b")
-nxt = repeat_dates(feb.start, a._task_rule(feb), date(2028, 1, 1), a._anchor_day(feb, a._task_rule(feb)))[:1]
-check("3 2월 회차를 체크하면 다음 회차는 3월 31일", nxt == [date(2027, 3, 31)], nxt)
-a.store.set(CALS, [task("c", date(2027, 2, 28))], {}, (date(2026, 12, 1), date(2027, 6, 1)))
-a._project_task_repeats()
-proj = sorted(e.first_day for e in a.store.events if e.virtual)[:2]
-check("3 정말 28일에 하는 할 일은 28일 그대로", proj == [date(2027, 3, 28), date(2027, 4, 28)], proj)
-a.cfg["task_repeats"] = {}
-a.store.set(CALS, [], {}, (T - timedelta(days=60), T + timedelta(days=90)))
-
 # ---------- 6: 'N일 경과' 형식의 미래 날짜 ----------
 cd = Event("cd", "me", "결혼기념일", T + timedelta(days=64), T + timedelta(days=65), True, countdown="memorial|both|passed")
 check("6 'N일 경과' 형식이어도 아직 안 온 날은 남은 날로(막대)", w.countdown_text(cd) == "[기념일] 결혼기념일 64일 남음",
@@ -519,21 +494,6 @@ check("R7 두 번째 동기화는 오래된 카운트다운을 다시 받지 않
 g._call(svc.events().patch(calendarId="me", eventId="love", body={}))
 g.fetch_all(T, T + timedelta(days=30), False)
 check("R7 무언가 고친 뒤에는 다시 받음", old_queries() == 2, old_queries())
-
-# ---------- R3: 31일에서 28일로 옮긴 매월 할 일은 2월 28일 뒤에도 28일 ----------
-a.cfg["task_repeats"] = {"L1|월세": "monthly"}
-a.store.set(CALS, [task("x", date(2026, 12, 31), True), task("y", date(2027, 1, 28), True),
-                   task("z", date(2027, 2, 28))], {}, (date(2026, 12, 1), date(2027, 6, 1)))
-a._project_task_repeats()
-proj = sorted(e.first_day for e in a.store.events if e.virtual)[:2]
-check("R3 예전 31일 기록이 있어도 바로 앞 회차(28일)를 따름", proj == [date(2027, 3, 28), date(2027, 4, 28)], proj)
-a.store.set(CALS, [task("a", date(2027, 1, 31), True), task("b", date(2027, 2, 28))], {},
-            (date(2026, 12, 1), date(2027, 6, 1)))
-a._project_task_repeats()
-proj = sorted(e.first_day for e in a.store.events if e.virtual)[:1]
-check("R3 말일로 당겨진 31일 회차 뒤는 여전히 31일", proj == [date(2027, 3, 31)], proj)
-a.cfg["task_repeats"] = {}
-a.store.set(CALS, [], {}, (T - timedelta(days=60), T + timedelta(days=90)))
 
 # ---------- R6: 칸 편집기에서 공백만 고쳐도 이름 바꾸기로 저장 ----------
 a.store.events += [Event("ws", "me", "회의 준비", D2, D2 + timedelta(days=1), True)]

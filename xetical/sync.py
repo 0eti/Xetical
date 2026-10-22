@@ -76,7 +76,6 @@ class SyncMixin:
         else:
             calendars, events, holidays, rng, countdowns, tasks_status = res
             self.store.set(calendars, events, holidays, rng)
-            self._project_task_repeats()
             self.win.countdowns = nearest_countdowns(countdowns)
             self._last_sync = datetime.now()
             self.win.cloud_state = "ok"

@@ -307,13 +307,12 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
     def show_event_menu(self, ev, d, pos):
         """일정 위 우클릭: 편집·복사·잘라내기·삭제(+ 초대 응답) + '이 날짜' 하위 메뉴."""
         m = QMenu()
-        real = self._real(ev)
         self._add(m, "편집…", lambda: self.edit_event(ev))
-        if (ev.task_list or ev.todo) and real:
-            self._add(m, "미완료로 표시" if real.done else "완료로 표시", lambda: self.toggle_task(real))
-        self._add(m, "복사", self.copy_selected, enabled=not ev.virtual)
-        self._add(m, "잘라내기", self.cut_selected, enabled=not ev.virtual and (ev.writable or bool(ev.task_list)))
-        self._add(m, "삭제", self.delete_selected, enabled=not ev.virtual and (ev.writable or bool(ev.task_list)))
+        if ev.task_list or ev.todo:
+            self._add(m, "미완료로 표시" if ev.done else "완료로 표시", lambda: self.toggle_task(ev))
+        self._add(m, "복사", self.copy_selected)
+        self._add(m, "잘라내기", self.cut_selected, enabled=ev.writable or bool(ev.task_list))
+        self._add(m, "삭제", self.delete_selected, enabled=ev.writable or bool(ev.task_list))
         if ev.response:
             rm = m.addMenu("초대 응답")
             for status, label in (("accepted", "참석"), ("tentative", "미정"), ("declined", "거절")):
@@ -465,8 +464,6 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
             self.gcal.want_drive = self.cfg["mood_sync"]
             if self.cfg["mood_sync"]:
                 self.mood_timer.start()
-        if key in ("show_task_projection", "task_repeats"):
-            self._project_task_repeats()
         if self._dayview is not None and self._dayview.isVisible():
             self._dayview.refresh()
         self.win.update()

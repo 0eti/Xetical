@@ -225,12 +225,9 @@ ed.close()
 
 # ---------- 8. 화면 그리기 ----------
 a.store.set(CALS, [e for e in BASE], {}, (T - timedelta(days=60), T + timedelta(days=90)))
-a._project_task_repeats()
-a.cfg["task_repeats"] = {"L1|화분 물 주기": "weekly"}
 for e in a.store.events:
     if e.task_list:
         e.done = False
-a._project_task_repeats()
 w = a.win
 w.anchor = w.today_anchor()
 w.resize(800, 600)
@@ -238,7 +235,6 @@ img = w.grab()
 img.save(str(SP / "render.png"))
 check("그리기: 할 일 ☐ 누르는 자리 생김", any(ev.task_list for _r, ev in w._check_hits))
 check("그리기: 여러 날 막대 생김", any(ev.id == "trip" for _r, ev in w._event_hits))
-check("그리기: 반복 할 일 예정 표시", any(e.virtual for e in a.store.events))
 check("그리기: 날짜 숫자 누르는 자리", len(w._date_hits) == 42)
 hit = next(r for r, ev in w._check_hits if ev.task_list)
 fake.calls.clear()

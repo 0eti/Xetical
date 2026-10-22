@@ -56,8 +56,6 @@ class Event:
     popup_minutes: list = field(default_factory=list)  # 구글 팝업 알림(분 전)
     writable: bool = True
     task_list: str = ""              # 구글 할 일이면 그 목록 id
-    virtual: bool = False            # 반복 할 일의 앞으로 예정(구글에는 없고 Xetical이 그린 것)
-    source_id: str = ""              # virtual이면 원래 할 일의 id
     response: str = ""               # 초대받은 일정이면 내 응답: needsAction | accepted | tentative | declined
     organizer: str = ""              # 초대한 사람
 
@@ -82,7 +80,7 @@ class Event:
     @property
     def is_line_candidate(self):
         """셀 편집기에서 '한 줄'로 다룰 수 있는 일정: 하루짜리 종일, 쓰기 가능(반복 일정도 포함)."""
-        return self.all_day and self.writable and len(self.days()) == 1 and not self.virtual \
+        return self.all_day and self.writable and len(self.days()) == 1 \
             and not self.countdown and not self.alarm and not self.task_list and not self.response and not self.todo
 
     @property
@@ -179,7 +177,7 @@ class EventStore:
     def save_cache(self):
         data = {
             "calendars": self.calendars,
-            "events": [e.to_json() for e in self.events if not e.virtual],
+            "events": [e.to_json() for e in self.events],
             "holidays": {d.isoformat(): v for d, v in self.holidays.items()},
         }
         tmp = CACHE_PATH.with_suffix(".tmp")

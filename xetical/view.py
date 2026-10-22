@@ -274,7 +274,7 @@ class CalendarWindow(QWidget):
     def _shown(self, ev):
         c = self.cfg
         if ev.task_list or ev.todo:  # 반복 할 일도 할 일 설정을 따른다
-            if not c["show_tasks"] or (ev.virtual and not c["show_task_projection"]):
+            if not c["show_tasks"]:
                 return False
             if ev.done and not c["show_done_tasks"]:
                 return False
@@ -666,12 +666,12 @@ class CalendarWindow(QWidget):
                 f.setItalic(ev.response in ("needsAction", "tentative"))
                 p.setFont(f)
                 dimmed = ev.done or ev.response == "declined"
-                p.setOpacity(base_opacity * (0.5 if dimmed else 0.45 if ev.virtual else 1.0))
+                p.setOpacity(base_opacity * (0.5 if dimmed else 1.0))
                 p.setPen(QColor(self.item_color(ev)))
                 p.drawText(tr, flags, text)
                 p.setOpacity(base_opacity)
                 self._event_hits.append((vis.intersected(area), ev))
-                if ev.task_list or ev.todo:  # ☐ 누르는 자리(1-1). 예정(virtual)을 누르면 지금 차례 할 일이 완료된다
+                if ev.task_list or ev.todo:  # ☐ 누르는 자리(1-1)
                     cx = area.left() + bar + fm.horizontalAdvance(prefix)
                     self._check_hits.append((QRectF(cx - 2, ey, fm.horizontalAdvance("☐ ") + 4, lh), ev))
             ey += h + gap
@@ -1034,7 +1034,7 @@ class CalendarWindow(QWidget):
         else:
             ev, d = self._event_at(pos), self._day_at(pos)
             self.select(ev, d)
-            if ev and not ev.virtual and (ev.writable or ev.task_list) and not ev.id.startswith("tmp-"):
+            if ev and (ev.writable or ev.task_list) and not ev.id.startswith("tmp-"):
                 self._drag = {"ev": ev, "pos": pos, "cur": pos, "day": d, "active": False, "target": d}
             elif not ev and self._date_label_at(pos):
                 self._pending_day = self._date_label_at(pos)
@@ -1106,9 +1106,7 @@ def tooltip_text(ev, store, cfg=None):
 
     def t(dt):
         return fmt_time(dt, cfg) if cfg else f"{dt:%H:%M}"
-    if ev.virtual:
-        when = f"{ev.start:%m/%d} 예정 · 반복 할 일"
-    elif ev.task_list or ev.todo:
+    if ev.task_list or ev.todo:
         when = f"{ev.start:%m/%d} 마감 · {'완료한 할 일' if ev.done else '할 일'}"
     elif ev.all_day:
         last = ev.end - timedelta(days=1)

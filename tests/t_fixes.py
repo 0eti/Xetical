@@ -305,12 +305,11 @@ check("A4 보낼 변경이 없으면 받은 결과를 반영", not any(e.id == "
 # ---------- B8: Delete·Ctrl+X 확인 ----------
 calls = []
 a.delete_event = lambda ev, confirm=False: calls.append(ev.id)
-virt = Event("v1", "tasks:L1", "예정", T, T + timedelta(days=1), True, task_list="L1", virtual=True)
-for ev in (virt, BASE[3]):
+for ev in (BASE[3],):
     a.win.selected_event = ev
     a.delete_selected()
     a.cut_selected()
-check("B8 '예정'과 읽기 전용 일정은 Delete·Ctrl+X로 지우지 않음", calls == [], calls)
+check("B8 읽기 전용 일정은 Delete·Ctrl+X로 지우지 않음", calls == [], calls)
 a.win.selected_event = BASE[1]
 a.delete_selected()
 check("B8 보통 일정은 Delete로 지움", calls == ["x1"], calls)

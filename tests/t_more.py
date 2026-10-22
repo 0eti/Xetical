@@ -279,12 +279,6 @@ for label in ("취소", "저장 및 동기화", "닫기"):
         b.click()
     check(f"일정 창 '{label}' 누르면 닫힘", b is not None and not d_.isVisible())
 
-# ---------- 할 일 반복 기억 ----------
-a._remember_task_repeat("L1", "보고서", "monthly")
-check("할 일 반복 주기 기억", a.cfg["task_repeats"].get("L1|보고서") == "monthly")
-a._remember_task_repeat("L1", "주간 보고서", "monthly", old_title="보고서")
-check("할 일 이름 바꾸면 주기도 따라감", "L1|보고서" not in a.cfg["task_repeats"] and a.cfg["task_repeats"].get("L1|주간 보고서"))
-a.cfg["task_repeats"] = {}
 
 # ---------- 셀 편집기 ----------
 from xetical.editor import CellEditor

@@ -152,7 +152,7 @@ class CellEditor(QWidget):
 
     def _item_label(self, ev):
         if ev.task_list or ev.todo:
-            return ("☑ " if ev.done else "☐ ") + ev.title + (" (예정)" if ev.virtual else "")
+            return ("☑ " if ev.done else "☐ ") + ev.title
         icons = ("↻" if ev.recurring else "") + ("⏰" if ev.alarm else "") + ("⏳" if ev.countdown else "")
         if ev.all_day:
             when = "" if len(ev.days()) == 1 else f"[{ev.start:%m/%d}~{ev.end - timedelta(days=1):%m/%d}] "

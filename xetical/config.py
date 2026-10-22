@@ -98,8 +98,8 @@ DEFAULTS = {
     "auto_sync": True,
     "show_color_bar": False,
     "wheel_paging": False,         # 마우스 휠로 주 이동(DesktopCal에는 없음)
-    # 구글 할 일의 반복 주기. 구글 API가 반복 정보를 주지 않아서 Xetical이 따로 기억한다.
-    # {"목록id|할 일 제목": "daily" | "weekly" | "biweekly" | "monthly" | "yearly"}
+    # 예전(1.3.2까지) 반복 할 일 기억 {"목록id|할 일 제목": "weekly" …}. 이제 반복 할 일은 구글 캘린더 반복 일정이라
+    # 남아 있으면 첫 동기화 때 한 번 옮기고 비운다(tasks._migrate_repeats).
     "task_repeats": {},
     # ── 기능 추가분 ──
     "click_through": False,        # 바탕화면 아이콘 클릭 통과(아이콘은 아이콘으로, 빈 곳은 달력으로)
@@ -107,7 +107,6 @@ DEFAULTS = {
     "show_declined": False,        # 거절한 초대 일정 표시
     "show_tasks": True,            # 할 일 표시
     "show_done_tasks": True,       # 완료한 할 일 표시
-    "show_task_projection": True,  # 반복 할 일 '예정' 표시
     "sync_past_months": 1,         # 동기화 범위(과거)
     "sync_future_months": 3,       # 동기화 범위(미래)
     "time_format": "24h",          # 24h | ampm
