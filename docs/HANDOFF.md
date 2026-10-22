@@ -84,7 +84,7 @@
     거절되고 달력 위쪽에 '구글 저장 공간이 가득 차서…' 안내가 뜬다(풀리면 다음 동기화에서 지운다).
   - **프린트 기능은 지웠다(2026-10-22, 사용자 요청).**
   - 3-1·3-2·3-3·3-4·3-6·3-7·3-8, 4-1·4-2·4-3·4-5·4-6·4-7
-- **1-4 exe 완료(v1.2.0, 최신 v1.3.0 = 트래커·드라이브 동기화, 2026-10-22):** GitHub Releases에 포터블 zip과 설치 파일(setup.exe)을 올렸다. 만들기: `scripts/build_exe.py`(README 참고).
+- **1-4 exe 완료(v1.2.0, v1.3.0 = 트래커·드라이브 동기화, 최신 v1.3.1 = 버그 찾기 12가지 고침, 2026-10-22):** GitHub Releases에 포터블 zip과 설치 파일(setup.exe)을 올렸다. 만들기: `scripts/build_exe.py`(README 참고).
   - 설치 프로그램은 `installer/xetical.iss`(Inno Setup 6). Inno Setup은 이 PC에 사용자 범위로 설치돼 있다(`%LOCALAPPDATA%\Programs\Inno Setup 6`, Claude 앱 안에서 설치해서 가상화됐을 수 있음).
 - **계획만:** 2-1 빠른 입력, 2-8 종류별 아이콘 → `docs/plans.md`
 - **보류·제외**
