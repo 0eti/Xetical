@@ -161,4 +161,99 @@ check("1 반복 할 일은 한 줄 일정이 아님", not ev.is_line_candidate)
 check("1 보통 하루 종일 일정은 그대로 한 줄", Event("y", "me", "t", FRI, FRI + timedelta(days=1), True).is_line_candidate)
 check("1 일정 값에 할 일 표시", ev.values()["todo"] is True)
 
+
+# ---------------------------------------------------------------- 앱 수준(가짜 구글이 받은 작업을 적어 둔다)
+class FakeG:
+    def __init__(self):
+        self.calls, self.rrule = [], ""
+
+    def __getattr__(self, name):
+        def fn(*args):
+            self.calls.append((name, args))
+            if name == "create_event":
+                return args[0].get("event_id") or "real"
+            if name == "apply_ops":
+                return [op[2].get("event_id") for op in args[0] if op[0] == "create"]
+            if name == "create_task":
+                return f"task:{args[0]}:new"
+            if name == "fetch_all":
+                return CALS, [], {}, (args[0], args[1]), [], "ok"
+            if name == "get_rrule":
+                return self.rrule, {}
+            return None
+        return fn
+
+    def has_token(self):
+        return True
+
+    def has_client_secret(self):
+        return True
+
+    def has_drive_scope(self):
+        return False
+
+
+def jobs_named(op):
+    """가짜 구글이 받은 그 작업들의 인자(보낼 편지함을 다 보낸 뒤)."""
+    pump(lambda: len(a.outbox) == 0)
+    return [args for name, args in fake.calls if name == op]
+
+
+CALS = [{"id": "me", "summary": "캘린더", "color": "#4a90d9", "primary": True, "writable": True, "selected": True},
+        {"id": "tasks:L1", "summary": "할 일: 목록", "color": "#4285f4", "primary": False, "writable": False,
+         "selected": True, "tasks": True}]
+RANGE = (date(2026, 12, 1), date(2027, 4, 1))
+a = A.App()
+fake = FakeG()
+a.gcal = fake
+a.outbox.gcal = fake
+a.store.set(CALS, [], {}, RANGE)
+a._last_sync = __import__("datetime").datetime.now()
+w = a.win
+
+# ---------- 2: '새 할 일' 창에서 반복을 고르면 반복 일정으로 ----------
+a.new_task(FRI)
+dlg = a._dialogs[-1]
+dlg.title.setText("손톱 깎기")
+dlg.repeat.setCurrentIndex(dlg.repeat.findData("weekly"))
+check("2 반복을 고르면 '목록' 줄이 숨음", not dlg.list.isVisibleTo(dlg))
+dlg._save()
+shown = any(e.title == "손톱 깎기" and e.todo and e.first_day == FRI + timedelta(days=7) for e in a.store.events)
+made = jobs_named("create_event")
+check("2 반복을 고르면 구글 할 일 대신 반복 일정", made and made[-1][0]["todo"] is True
+      and made[-1][0]["recurrence"] == "RRULE:FREQ=WEEKLY;BYDAY=FR" and made[-1][0]["calendar_id"] == "me"
+      and made[-1][0]["start"] == FRI and not jobs_named("create_task"), made)
+check("2 반복 할 일은 이 PC의 예전 반복 기억에 넣지 않음", a.cfg["task_repeats"] == {}, a.cfg["task_repeats"])
+check("2 저장하자마자 다음 회차도 보임", shown)
+check("2 되돌리기는 반복 일정 지우기", a.undo_stack[-1]["jobs"][0][0] == "delete_event")
+
+a.new_task(FRI)
+dlg = a._dialogs[-1]
+dlg.title.setText("장보기")
+check("2 반복 안 함이면 '목록' 줄이 보임", dlg.list.isVisibleTo(dlg))
+dlg._save()
+check("2 반복 안 함이면 지금처럼 구글 할 일", [x[1] for x in jobs_named("create_task")] == ["장보기"],
+      jobs_named("create_task"))
+
+plain = Event("task:L1:p1", "tasks:L1", "물 주기", FRI, FRI + timedelta(days=1), True, task_list="L1")
+a.store.events.append(plain)
+a._open_task_dialog(plain)
+dlg = a._dialogs[-1]
+dlg.repeat.setCurrentIndex(dlg.repeat.findData("monthly"))
+dlg.action = "save"
+dlg.accepted.emit()
+gone = not any(e.id == "task:L1:p1" for e in a.store.events)  # 동기화가 화면을 다시 채우기 전에 본다
+conv = jobs_named("task_to_todo")
+check("2 보통 할 일을 반복으로 바꾸면 반복 일정을 만들고 그 할 일은 지움(한 작업: 만든 뒤에만 지움)",
+      len(conv) == 1 and conv[0][0].id == "task:L1:p1"
+      and conv[0][1]["recurrence"] == "RRULE:FREQ=MONTHLY;BYMONTHDAY=15"
+      and conv[0][1]["title"] == "물 주기" and conv[0][1]["todo"] and conv[0][1].get("event_id"), conv)
+g, svc = fresh()
+g.task_to_todo(plain, dict(todo_values("물 주기", "", FRI, "monthly", "me"), event_id="abc"))
+check("2 구글에는 반복 일정을 먼저 만들고 그다음 할 일을 지움",
+      [k for k, _ in svc.log if k in ("events.insert", "tasks.delete")] == ["events.insert", "tasks.delete"], svc.log)
+check("2 바꾼 할 일은 화면에서도 바로 빠짐", gone)
+check("2 되돌리기: 반복 일정 지우고 할 일 되살리기",
+      [j[0] for j in a.undo_stack[-1]["jobs"]] == ["delete_event", "create_task"], a.undo_stack[-1]["jobs"])
+
 print(f"\n{sum(ok for _, ok in results)}/{len(results)} 통과")

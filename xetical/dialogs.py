@@ -605,9 +605,11 @@ TASK_REPEATS = {"none": "안 함", "daily": "매일", "weekly": "매주", "biwee
 
 
 class TaskDialog(QDialog):
-    """구글 할 일 편집. task_lists = [{id: 'tasks:<목록id>', summary}] (새로 만들 때 목록 선택용)"""
+    """할 일 편집. task_lists = [{id: 'tasks:<목록id>', summary}] (새로 만들 때 목록 선택용)
+    반복을 고르면 구글 할 일이 아니라 구글 캘린더의 반복 일정(반복 할 일)이 된다(구글 Tasks에는 반복 칸이 없다).
+    todo: 반복 할 일을 여는 창. repeat="keep"이면 휴대폰 등에서 바꾼, 이 창이 만들지 않는 규칙을 그대로 둔다."""
 
-    def __init__(self, task_lists, event=None, day=None, repeat="none"):
+    def __init__(self, task_lists, event=None, day=None, repeat="none", todo=False):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setWindowTitle("할 일 수정" if event else "새 할 일")
         self.setMinimumWidth(380)
@@ -631,20 +633,20 @@ class TaskDialog(QDialog):
         self.repeat = QComboBox()
         for k, label in TASK_REPEATS.items():
             self.repeat.addItem(label, k)
+        if repeat == "keep":
+            self.repeat.addItem("기존 규칙 유지", "keep")
         self.repeat.setCurrentIndex(max(0, self.repeat.findData(repeat)))
-        repeat_hint = QLabel("구글은 할 일의 반복 정보를 다른 프로그램에 알려주지 않아요.\n"
-                             "여기서 고르면 Xetical이 앞으로의 날짜에 흐리게 '예정'을 그려 줘요.")
-        repeat_hint.setStyleSheet("color:gray;font-size:11px;")
+        self.todo = todo
         form = QFormLayout()
         top = QHBoxLayout()
         top.addWidget(self.title, 1)
         top.addWidget(self.done_box)
         form.addRow("할 일", top)
         form.addRow("마감일", self.due)
-        form.addRow("반복 (Xetical 표시용)", self.repeat)
-        form.addRow("", repeat_hint)
+        form.addRow("반복", self.repeat)
         form.addRow("목록", self.list)
         form.addRow("메모", self.notes)
+        self.form = form
         buttons = QDialogButtonBox()
         buttons.addButton("저장 및 동기화", QDialogButtonBox.AcceptRole)
         buttons.addButton("취소", QDialogButtonBox.RejectRole)
@@ -656,7 +658,16 @@ class TaskDialog(QDialog):
         lay = QVBoxLayout(self)
         lay.addLayout(form)
         lay.addWidget(buttons)
+        self.repeat.currentIndexChanged.connect(self._sync_list)
+        self._sync_list()
         self.title.setFocus()
+
+    def _repeating(self):
+        return self.todo or self.repeat.currentData() != "none"
+
+    def _sync_list(self):
+        """반복 할 일은 구글 캘린더에 만들어지므로 할 일 '목록'은 쓰지 않는다."""
+        self.form.setRowVisible(self.list, not self._repeating())
 
     def values(self):
         return {"title": self.title.text().strip() or "(제목 없음)", "notes": self.notes.toPlainText(),
@@ -664,7 +675,7 @@ class TaskDialog(QDialog):
                 "repeat": self.repeat.currentData()}
 
     def _save(self):
-        if self.list.currentData():
+        if self.list.currentData() or self._repeating():
             self.action = "save"
             self.accept()
 

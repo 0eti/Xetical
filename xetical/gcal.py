@@ -568,6 +568,13 @@ class GCal:
                 return v["event_id"]
             raise
 
+    def task_to_todo(self, task_ev, v):
+        """보통 할 일을 반복 할 일(v = todo_values)로: 반복 일정을 만든 뒤에만 할 일을 지운다
+        (만들기가 거절되면 할 일은 남는다. 미리 정한 id라 다시 보내도 두 번 만들어지지 않는다)."""
+        new_id = self.create_event(v)
+        self.delete_task(task_ev)
+        return new_id
+
     def update_event(self, ev, v, scope="one"):
         """scope: one=이번만, following=이번과 이후, all=전체(반복 일정일 때만 의미가 있다).
         v["recurrence"]: KEEP(None)=규칙 그대로, NO_REPEAT("")=반복 안 함, "RRULE:…"=새 규칙."""

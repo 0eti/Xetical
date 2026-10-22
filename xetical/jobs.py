@@ -91,6 +91,8 @@ def assign_event_ids(op, args):
         values = [args[0]]
     elif op == "apply_ops":
         values = [o[2] for o in args[0] if o[0] == "create"]
+    elif op == "task_to_todo":
+        values = [args[1]]
     elif op == "update_event" and len(args) > 2 and args[2] == "following":  # '이번과 이후'는 뒤쪽 반복을 새로 만든다
         values = [args[1]]
     else:

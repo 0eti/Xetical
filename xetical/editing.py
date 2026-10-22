@@ -64,7 +64,7 @@ class EditMixin:
                      all_day=v["all_day"], done=v.get("done", False), text_color=v.get("text_color", ""),
                      order=v.get("order", 0), line=v.get("line", False), alarm=v.get("alarm", ""),
                      countdown=v.get("countdown", ""), description=v.get("description", ""),
-                     location=v.get("location", ""), recurring=bool(v.get("recurrence")))
+                     location=v.get("location", ""), recurring=bool(v.get("recurrence")), todo=v.get("todo", False))
 
     def open_cell_editor(self, day, rect):
         if self._need_login():

@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QMessageBox
 from .dialogs import TaskDialog, repeat_dates
 from .jobs import new_tmp
 from .model import Event
+from .todos import todo_values
 from .widgets import confirm as ask_confirm
 from .widgets import play_sound
 
@@ -112,7 +113,11 @@ class TaskMixin:
 
         def done():
             v = dlg.values()
-            self._remember_task_repeat(v["list_id"], v["title"], v["repeat"])
+            if v["repeat"] != "none":  # 반복 할 일은 구글 캘린더의 반복 일정으로 만든다(구글 Tasks에는 반복이 없다)
+                ev = self._create_todo(todo_values(v["title"], v["notes"], v["due"], v["repeat"],
+                                                   self.default_calendar()))
+                self.push_undo("새 반복 할 일", [("delete_event", [ev, "one"], [])])
+                return
             tmp = new_tmp()
             ev = Event(id=tmp, calendar_id=f"tasks:{v['list_id']}", title=v["title"], start=v["due"],
                        end=v["due"] + timedelta(days=1), all_day=True, task_list=v["list_id"], description=v["notes"])
@@ -121,6 +126,16 @@ class TaskMixin:
             self.push_undo("새 할 일", [("delete_task", [ev], [])])
         dlg.accepted.connect(done)
         self._keep(dlg)
+
+    def _create_todo(self, v, op="create_event", *before):
+        """반복 할 일(하루 종일 반복 일정, v = todo_values(...))을 만들고 저장하자마자 회차들을 화면에 그린다.
+        before: op 앞에 넣을 인자(보통 할 일을 바꿀 때 지울 할 일). 만든 Event를 돌려준다(되돌리기용)."""
+        tmp = new_tmp()
+        ev = self._event_from_values(tmp, v)
+        self._add_temp(ev)
+        self._add_temp_repeats(ev, v["recurrence"])
+        self.outbox.add(op, *before, v, tmps=[tmp], label="새 반복 할 일")
+        return ev
 
     @staticmethod
     def _task_key(list_id, title):
@@ -158,14 +173,22 @@ class TaskMixin:
         self.win.update()
 
     def _open_task_dialog(self, ev):
-        rule = self.cfg["task_repeats"].get(self._task_key(ev.task_list, ev.title), "none")
-        dlg = TaskDialog(self.task_lists(), event=ev, repeat=rule)
+        dlg = TaskDialog(self.task_lists(), event=ev)
 
         def done():
             v = dlg.values()
-            if dlg.action == "save":
+            if dlg.action == "save" and v["repeat"] != "none":
+                # 보통 할 일을 반복 할 일로: 그 마감일부터 반복 일정을 만들고 할 일은 지운다(만들어진 뒤에만 지운다)
+                new = self._create_todo(todo_values(v["title"], v["notes"], v["due"], v["repeat"],
+                                                    self.default_calendar()), "task_to_todo", ev)
+                self._remove_local(ev.id)
+                self.push_undo("반복 할 일로 바꾸기", [
+                    ("delete_event", [new, "one"], []),
+                    ("create_task", [ev.task_list, ev.title, ev.description, ev.start, ev.done], [new_tmp()])])
+                self._after_task_change()
+                self.sync()
+            elif dlg.action == "save":
                 old = (ev.title, ev.description, ev.start, ev.done)
-                self._remember_task_repeat(ev.task_list, v["title"], v["repeat"], old_title=ev.title)
                 self.outbox.add("update_task", ev, v["title"], v["notes"], v["due"], v["done"], label="할 일 수정")
                 jobs = [("update_task", [ev, *old], [])]
                 became_done = v["done"] and not ev.done
