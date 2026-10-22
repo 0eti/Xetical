@@ -13,9 +13,9 @@ from PySide6.QtWidgets import (QCalendarWidget, QCheckBox, QComboBox, QDateEdit,
 
 from .gcal import is_holiday_calendar
 from .model import COUNTDOWN_TYPES, KEEP, NO_REPEAT
+from .todos import WD_CODES, parse_rrule, repeat_dates  # noqa: F401 - repeat_dates는 예전처럼 여기서도 쓸 수 있게
 from .widgets import ColorButton, confirm
 
-WD_CODES = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"]
 WD_NAMES = "월화수목금토일"
 
 
@@ -62,21 +62,10 @@ REPEAT_KINDS = [
 ]
 
 
-def parse_rrule(rule):
-    if not rule:
-        return {}
-    out = {}
-    for part in rule.split(":", 1)[-1].split(";"):
-        if "=" in part:
-            k, v = part.split("=", 1)
-            out[k.upper()] = v
-    return out
-
-
 def rule_dates(rule, start, until):
     """RRULE의 회차 날짜(start 포함, until 전까지). 저장하자마자 다음 회차들을 화면에 보여 주는 데 쓴다
     (진짜 회차는 동기화 때 구글에서 받는다). 이 창이 만드는 규칙 모양만 다룬다: DAILY·WEEKLY(BYDAY)·
-    MONTHLY(BYMONTHDAY, -1, N번째 요일)·YEARLY, INTERVAL·COUNT·UNTIL."""
+    MONTHLY(BYMONTHDAY, -1, N번째 요일, BYSETPOS=-1)·YEARLY(BYMONTH·BYMONTHDAY·BYSETPOS=-1), INTERVAL·COUNT·UNTIL."""
     p = parse_rrule(rule)
     freq, n = p.get("FREQ"), int(p.get("INTERVAL", 1) or 1)
     if freq not in ("DAILY", "WEEKLY", "MONTHLY", "YEARLY"):
@@ -90,6 +79,16 @@ def rule_dates(rule, start, until):
     days = [WD_CODES.index(x[-2:]) for x in p.get("BYDAY", "").split(",") if x[-2:] in WD_CODES]
     nth = [int(x[:-2]) for x in p.get("BYDAY", "").split(",") if x[:-2].lstrip("-").isdigit()]
     mdays = [int(x) for x in p.get("BYMONTHDAY", "").split(",") if x.lstrip("-").isdigit()]
+    bymonth = [int(x) for x in p.get("BYMONTH", "").split(",") if x.isdigit()]
+    last_only = p.get("BYSETPOS") == "-1"
+
+    def day_hit(d, last_day):
+        """BYMONTHDAY(없으면 시작한 날)에 맞는 날인가. BYSETPOS=-1이면 그 달에 있는 것 중 마지막 날만
+        (예: 28,29,30,31 → 짧은 달은 말일)."""
+        days = [m if m > 0 else last_day + m + 1 for m in (mdays or [start.day])]
+        if last_only:
+            days = [max(x for x in days if x <= last_day)] if any(x <= last_day for x in days) else []
+        return d.day in days
 
     def hit(d):
         months = (d.year - start.year) * 12 + d.month - start.month
@@ -105,7 +104,9 @@ def rule_dates(rule, start, until):
             if nth:  # 예: 2MO(둘째 월요일), -1FR(마지막 금요일)
                 k = (d.day - 1) // 7 + 1 if nth[0] > 0 else -((last_day - d.day) // 7 + 1)
                 return d.weekday() in days and k == nth[0]
-            return any(d.day == (m if m > 0 else last_day + m + 1) for m in (mdays or [start.day]))
+            return day_hit(d, last_day)
+        if bymonth:
+            return (d.year - start.year) % n == 0 and d.month in bymonth and day_hit(d, last_day)
         return (d.year - start.year) % n == 0 and (d.month, d.day) == (start.month, start.day)
 
     out, d = [], start
@@ -601,25 +602,6 @@ class EventDialog(QDialog):
 # ---------------------------------------------------------------- 할 일(Google Tasks)
 TASK_REPEATS = {"none": "안 함", "daily": "매일", "weekly": "매주", "biweekly": "2주마다",
                 "monthly": "매월", "yearly": "매년"}
-
-
-def repeat_dates(base, rule, until, day=None):
-    """반복 할 일의 base 다음 회차들(until 전까지). 월·연 반복은 원래 날짜 기준이라 31일이 30일로 밀리지 않는다.
-    day: 월·연 반복의 원래 날짜(base가 2월 28일로 당겨진 31일 회차면 31). 없으면 base의 날짜."""
-    days = {"daily": 1, "weekly": 7, "biweekly": 14}.get(rule)
-    months = {"monthly": 1, "yearly": 12}.get(rule)
-    out, k = [], 1
-    while days or months:
-        if days:
-            d = base + timedelta(days=days * k)
-        else:
-            y, m = divmod(base.year * 12 + base.month - 1 + months * k, 12)
-            d = date(y, m + 1, min(day or base.day, pycal.monthrange(y, m + 1)[1]))
-        if d >= until:
-            break
-        out.append(d)
-        k += 1
-    return out
 
 
 class TaskDialog(QDialog):

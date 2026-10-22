@@ -37,6 +37,7 @@ HOLIDAY_REGIONS = {
 # DesktopCal식 속성을 담는 extendedProperties.private 키
 P_DONE, P_COLOR, P_ORDER, P_LINE, P_ALARM, P_COUNTDOWN, P_CD = (
     "xeticalDone", "xeticalColor", "xeticalOrder", "xeticalLine", "xeticalAlarm", "xeticalCountdown", "xeticalCD")
+P_TODO = "xeticalTodo"  # 반복 할 일(이 표시가 있는 반복 일정만 ☐·할 일 창으로 다룬다)
 
 
 class AuthError(Exception):
@@ -135,6 +136,7 @@ def event_props(v):
         P_ALARM: v.get("alarm") or "",
         P_COUNTDOWN: v.get("countdown") or "",
         P_CD: "1" if v.get("countdown") else "",  # 카운트다운만 골라 받기 위한 표시
+        P_TODO: "1" if v.get("todo") else "",
     }
 
 
@@ -145,7 +147,8 @@ def _props_values(p):
     except ValueError:
         order = 0
     return {"done": p.get(P_DONE) == "1", "text_color": p.get(P_COLOR, ""), "order": order,
-            "line": p.get(P_LINE) == "1", "alarm": p.get(P_ALARM, ""), "countdown": p.get(P_COUNTDOWN, "")}
+            "line": p.get(P_LINE) == "1", "alarm": p.get(P_ALARM, ""), "countdown": p.get(P_COUNTDOWN, ""),
+            "todo": p.get(P_TODO) == "1"}
 
 
 def _series_values(ev, v, master):
@@ -153,7 +156,7 @@ def _series_values(ev, v, master):
     (이 회차만 완료했거나 색을 바꾼 것이 '모든 일정'·'이번 및 이후'로 고칠 때 전체로 퍼지지 않게)"""
     base = _props_values(master.get("extendedProperties", {}).get("private", {}))
     mine = {"done": ev.done, "text_color": ev.text_color, "order": ev.order, "line": ev.line,
-            "alarm": ev.alarm, "countdown": ev.countdown}
+            "alarm": ev.alarm, "countdown": ev.countdown, "todo": ev.todo}
     out = dict(v)
     for k, old in mine.items():
         if k not in v or (v[k] or "") == (old or ""):
@@ -545,6 +548,8 @@ class GCal:
             body["reminders"] = rem
         elif reset_reminders:
             body["reminders"] = {"useDefault": True, "overrides": None}
+        if v.get("todo"):  # 반복 할 일은 휴대폰 알림을 울리지 않는다(계정의 '종일 일정 기본 알림'이 매 회차 울리지 않게)
+            body["reminders"] = {"useDefault": False, "overrides": []}
         if for_insert:
             for k in ("start", "end"):
                 body[k] = {kk: vv for kk, vv in body[k].items() if vv is not None}
@@ -741,7 +746,7 @@ class GCal:
     def set_props(self, ev, **props):
         """완료·글자색 같은 DesktopCal식 속성만 바꾼다. 앱은 쓰지 않고 실제 구글 시험(t_google)이 회차를 표시할 때 쓴다."""
         cur = {"done": ev.done, "text_color": ev.text_color, "order": ev.order, "line": ev.line,
-               "alarm": ev.alarm, "countdown": ev.countdown}
+               "alarm": ev.alarm, "countdown": ev.countdown, "todo": ev.todo}
         cur.update(props)
         self._call(self._service().events().patch(
             calendarId=ev.calendar_id, eventId=ev.id, body={"extendedProperties": {"private": event_props(cur)}}))

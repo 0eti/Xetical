@@ -52,6 +52,7 @@ class Event:
     line: bool = False               # 셀 편집기에서 만든 줄
     alarm: str = ""                  # "HH:MM|0,1,7" = 알림 시각|며칠 전 목록
     countdown: str = ""              # "type|show|fmt" (show: bar/card/both, fmt: left/passed)
+    todo: bool = False               # 반복 할 일(하루 종일 반복 일정을 할 일처럼 ☐로 보인다)
     popup_minutes: list = field(default_factory=list)  # 구글 팝업 알림(분 전)
     writable: bool = True
     task_list: str = ""              # 구글 할 일이면 그 목록 id
@@ -82,7 +83,7 @@ class Event:
     def is_line_candidate(self):
         """셀 편집기에서 '한 줄'로 다룰 수 있는 일정: 하루짜리 종일, 쓰기 가능(반복 일정도 포함)."""
         return self.all_day and self.writable and len(self.days()) == 1 and not self.virtual \
-            and not self.countdown and not self.alarm and not self.task_list and not self.response
+            and not self.countdown and not self.alarm and not self.task_list and not self.response and not self.todo
 
     @property
     def is_multi_day(self):
@@ -95,7 +96,7 @@ class Event:
             "start": self.start, "end": self.end - timedelta(days=1) if self.all_day else self.end,
             "location": self.location, "description": self.description, "done": self.done,
             "text_color": self.text_color, "order": self.order, "line": self.line,
-            "alarm": self.alarm, "countdown": self.countdown, "recurrence": KEEP,
+            "alarm": self.alarm, "countdown": self.countdown, "todo": self.todo, "recurrence": KEEP,
         }
 
     def sort_key(self):
