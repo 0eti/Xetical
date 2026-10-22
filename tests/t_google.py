@@ -47,7 +47,7 @@ def cleanup():
     n = 0
     for cal in [c for c in g.fetch_all(*RANGE, want_holidays=False)[0] if c["writable"] and not c.get("tasks")]:
         items = svc.events().list(calendarId=cal["id"], q="Xetical 테스트", singleEvents=False,
-                                  timeMin="2024-12-01T00:00:00Z", timeMax="2027-03-01T00:00:00Z").execute().get("items", [])
+                                  timeMin="2023-12-01T00:00:00Z", timeMax="2029-03-01T00:00:00Z").execute().get("items", [])
         for it in items:
             if (it.get("summary") or "").startswith(P):
                 try:
@@ -244,6 +244,39 @@ try:
       # ---------- 초대 응답(내가 만든 일정이라 응답 대상 없음 → 오류 없이 지나가는지) ----------
       g.respond_event(Event(eid, CAL, "", D, D, True), "accepted")
       check("초대 응답 호출(내 일정에는 영향 없음)", True)
+
+      # ---------- 반복 할 일(하루 종일 반복 일정 + 할 일 표시) ----------
+      from xetical.todos import todo_values
+      svc = g._service()
+
+      def inst_days(eid, t0, t1):
+          items = svc.events().instances(calendarId=CAL, eventId=eid, timeMin=t0, timeMax=t1).execute()["items"]
+          return [it["start"].get("date") for it in items], items
+
+      mid = g.create_event(todo_values(f"{P} 반복 할 일 31일", "", date(2027, 1, 31), "monthly", CAL))
+      got = svc.events().get(calendarId=CAL, eventId=mid).execute()
+      check("반복 할 일: 휴대폰 알림 없음", got.get("reminders", {}).get("useDefault") is False
+            and not got["reminders"].get("overrides"), got.get("reminders"))
+      check("반복 할 일: 할 일 표시", got.get("extendedProperties", {}).get("private", {}).get("xeticalTodo") == "1")
+      days, items = inst_days(mid, "2027-01-30T00:00:00Z", "2027-06-01T00:00:00Z")
+      check("반복 할 일: 31일 매월은 짧은 달 말일(BYSETPOS)",
+            days[:5] == ["2027-01-31", "2027-02-28", "2027-03-31", "2027-04-30", "2027-05-31"], days)
+      yid = g.create_event(todo_values(f"{P} 반복 할 일 2월 29일", "", date(2024, 2, 29), "yearly", CAL))
+      ydays, _ = inst_days(yid, "2025-01-01T00:00:00Z", "2029-01-01T00:00:00Z")
+      check("반복 할 일: 2월 29일 매년은 평년 2월 28일",
+            ydays == ["2025-02-28", "2026-02-28", "2027-02-28", "2028-02-29"], ydays)
+      first = next((x for x in mine()[1] if x.recurring_event_id == mid), None)
+      check("반복 할 일: 받으면 할 일로(todo)", first is not None and first.todo and first.first_day == date(2027, 1, 31))
+      g.set_event_done(first, True)
+      done_now = next((x for x in mine()[1] if x.id == first.id), None)
+      _, items = inst_days(mid, "2027-02-27T00:00:00Z", "2027-03-01T00:00:00Z")
+      feb = items[0].get("extendedProperties", {}).get("private", {}) if items else {}
+      check("반복 할 일: ☐는 그 회차만 완료(할 일 표시는 그대로)", done_now is not None and done_now.done and done_now.todo
+            and feb.get("xeticalDone") != "1", (done_now, feb))
+      check("반복 할 일: 이미 있는 반복 할 일 찾기(옮기기에서 두 벌 방지)",
+            g.find_todo_series(CAL, f"{P} 반복 할 일 31일") and not g.find_todo_series(CAL, f"{P} 없는 할 일"))
+      for x in (mid, yid):
+          svc.events().delete(calendarId=CAL, eventId=x).execute()
 
       # ---------- 할 일 ----------
       if g.has_tasks_scope():
