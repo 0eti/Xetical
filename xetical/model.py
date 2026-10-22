@@ -105,6 +105,14 @@ class Event:
         kind, show, fmt = (self.countdown.split("|") + ["countdown", "bar", "left"])[:3]
         return kind or "countdown", show or "bar", fmt or "left"
 
+    def countdown_label(self):
+        """카운트다운 문구 → (숫자, 단위): ("오늘", ""), ("5", "일 남음"), ("12", "일 경과").
+        'N일 경과' 형식이어도 아직 오지 않은 날은 남은 날로 센다(형식은 어느 회차를 보일지만 정한다)."""
+        days = (self.first_day - date.today()).days
+        if days == 0:
+            return "오늘", ""
+        return str(abs(days)), "일 경과" if days < 0 else "일 남음"
+
     def to_json(self):
         d = asdict(self)
         d["start"] = self.start.isoformat()

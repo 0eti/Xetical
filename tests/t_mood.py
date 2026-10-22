@@ -272,6 +272,8 @@ check("합치기: 드라이브에 아직 없으면 이 PC 것 그대로", MD.mer
 
 # ---------- 드라이브 파일 읽고 쓰기(가짜 드라이브 API) ----------
 class _Req:
+    method = "GET"
+
     def __init__(self, fn):
         self.fn = fn
 

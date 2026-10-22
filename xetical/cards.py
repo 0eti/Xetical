@@ -1,6 +1,5 @@
 """바탕화면 카운트다운 카드(DesktopCal 카운트다운 카드). 달력처럼 바탕화면에 붙고, 끌어서 옮길 수 있다."""
 import ctypes.wintypes as wt
-from datetime import date
 
 from PySide6.QtCore import QPoint, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter
@@ -62,8 +61,7 @@ class CountdownCard(QWidget):
         p.setBrush(shade(self.cfg["cell_bg"], 0.6, alpha))
         p.drawRoundedRect(r, 8, 8)
         kind = self.ev.countdown_parts()[0]
-        days = (self.ev.first_day - date.today()).days
-        passed = days < 0  # 'N일 경과' 형식이어도 아직 오지 않은 날은 남은 날로 센다
+        num, unit = self.ev.countdown_label()
         k = self.scale()
         p.setFont(make_font(self.cfg["item_font"], 0.75 * k, bold=False))
         p.setPen(QColor(self.cfg["lunar_text"]))
@@ -74,11 +72,9 @@ class CountdownCard(QWidget):
         big.setBold(True)
         p.setFont(big)
         p.setPen(QColor(self.cfg["date_font"]["color"]))
-        num = "오늘" if days == 0 else str(abs(days))
         p.drawText(r.adjusted(10, 18 * k, -10, -28 * k), Qt.AlignCenter, num)
         p.setFont(make_font(self.cfg["item_font"], 0.8 * k))
         p.setPen(QColor(self.ev.text_color or self.cfg["item_font"]["color"]))
-        unit = "" if days == 0 else ("일 경과" if passed else "일 남음")
         p.drawText(r.adjusted(10, 0, -10, -8), Qt.AlignHCenter | Qt.AlignBottom,
                    self.fontMetrics().elidedText(f"{self.ev.title} {unit}".strip(), Qt.ElideRight, int(r.width() - 20)))
         p.end()

@@ -1,5 +1,6 @@
 """Google Calendar API 연동. 모든 메서드는 블로킹이므로 작업 스레드에서만 호출한다."""
 import json
+import logging
 import re
 from datetime import date, datetime, time, timedelta, timezone
 
@@ -24,6 +25,7 @@ TASKS_SCOPE = SCOPES[-1]
 DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.appdata"  # 트래커 동기화를 켰을 때만 받는다(앱 전용 숨은 폴더)
 MOODS_FILE = "xetical-moods.json"
 TASK_COLOR = "#4285f4"
+log = logging.getLogger("xetical")
 
 # DesktopCal '휴가 지역'에 대응하는 구글 공휴일 캘린더(이름은 한국어로 받는다)
 HOLIDAY_REGIONS = {
@@ -91,14 +93,18 @@ def _rrule_line(recurrence):
     return next((r for r in recurrence or [] if r.upper().startswith("RRULE:")), "")
 
 
-def _original_start(item):
-    """구글 반복 회차의 원래 자리(originalStartTime). 종일이면 date, 아니면 로컬 datetime, 없으면 None."""
-    o = item.get("originalStartTime") or {}
+def _when_value(o):
+    """구글 start·originalStartTime 값 → 종일이면 date, 아니면 로컬 datetime, 없으면 None."""
     if "date" in o:
         return date.fromisoformat(o["date"])
     if "dateTime" in o:
         return _local(o["dateTime"])
     return None
+
+
+def _original_start(item):
+    """구글 반복 회차의 원래 자리(originalStartTime)."""
+    return _when_value(item.get("originalStartTime") or {})
 
 
 def _is_first(ev, master):
@@ -186,6 +192,8 @@ class GCal:
         self._svc = None
         self._event_colors = None
         self._tz = None  # 기본 캘린더의 시간대 이름(예: Asia/Seoul)
+        self._writes = 0      # 구글에 무언가 고친 횟수(이 사이에 고쳤으면 아래 캐시를 버린다)
+        self._old_cds = None  # 오래된 'N일 경과' 카운트다운 캐시: (받은 시각, 그때의 _writes, {캘린더 id: [항목]})
         self.want_drive = False  # 트래커 드라이브 동기화를 켰으면 로그인할 때 드라이브 권한도 받는다(app이 정한다)
 
     # ---------- 인증 ----------
@@ -313,6 +321,8 @@ class GCal:
         return None
 
     def _call(self, request):
+        if request.method != "GET":
+            self._writes += 1
         try:
             return request.execute(num_retries=2)
         except (RefreshError, HttpError) as e:
@@ -326,6 +336,8 @@ class GCal:
         이미 지워진 일정(404/410)을 고치거나 지우는 것, 이미 만들어진 일정(409)을 또 만드는 것은 성공으로 친다.
         실패가 있으면 다시 보내면 될 오류를 먼저 올린다(그래야 보낼 편지함이 작업을 버리지 않고 다시 보낸다)."""
         errors, responses = [], {}
+        if any(r.method != "GET" for r in requests):
+            self._writes += 1
 
         def cb(req_id, resp, exc):
             if isinstance(exc, HttpError):
@@ -389,6 +401,12 @@ class GCal:
         # 카운트다운은 먼 미래일 수 있어서 따로 넓게 받는다
         today = date.today()
         countdowns = []
+        # 'N일 경과' 카운트다운(사귄 날 등)은 아주 오래전 날짜일 수 있어 400일 앞까지 더 받는다. 거의 바뀌지 않으니
+        # 한 시간에 한 번만 받는다(그 사이 이 PC에서 무언가 고쳤으면 다시 받는다).
+        now, writes, old = datetime.now(), self._writes, {}
+        if self._old_cds and self._old_cds[1] == writes and self._old_cds[0].date() == today \
+                and now - self._old_cds[0] < timedelta(hours=1):
+            now, old = self._old_cds[0], self._old_cds[2]
         for cal in calendars:
             if is_holiday_calendar(cal["id"]):
                 continue
@@ -397,14 +415,16 @@ class GCal:
                 ev = self._parse(item, cal)
                 if ev:
                     countdowns.append(ev)
-            # 'N일 경과' 카운트다운(사귄 날 등)은 아주 오래전 날짜일 수 있다. 반복으로 펼치지 않고 한 번짜리만 더 받는다.
-            for item in self._list_events(cal["id"], None, today - timedelta(days=400), private=f"{P_CD}=1",
-                                          single=False):
-                if "recurrence" in item or "recurringEventId" in item:
-                    continue
+            if cal["id"] not in old:  # 반복으로 펼치지 않고 한 번짜리만
+                old[cal["id"]] = [it for it in self._list_events(cal["id"], None, today - timedelta(days=400),
+                                                                 private=f"{P_CD}=1", single=False)
+                                  if "recurrence" not in it and "recurringEventId" not in it]
+            for item in old[cal["id"]]:
                 ev = self._parse(item, cal)
-                if ev and ev.countdown_parts() and ev.countdown_parts()[2] == "passed":
+                parts = ev and ev.countdown_parts()
+                if parts and parts[2] == "passed":
                     countdowns.append(ev)
+        self._old_cds = (now, writes, old)
         task_lists, tasks, tasks_status = self.fetch_tasks(start, end)
         return calendars + task_lists, events + tasks, holidays, (start, end), countdowns, tasks_status
 
@@ -462,10 +482,6 @@ class GCal:
             return None
         color = self._event_colors.get(item.get("colorId"), cal["color"]) if self._event_colors else cal["color"]
         p = item.get("extendedProperties", {}).get("private", {})
-        try:
-            order = int(p.get(P_ORDER) or 0)
-        except ValueError:
-            order = 0
         rem = item.get("reminders", {})
         popups = [o["minutes"] for o in rem.get("overrides", []) if o.get("method") == "popup"] \
             if not rem.get("useDefault", True) else []
@@ -478,9 +494,7 @@ class GCal:
             description=item.get("description", ""), location=item.get("location", ""),
             recurring="recurringEventId" in item, html_link=item.get("htmlLink", ""),
             recurring_event_id=item.get("recurringEventId", ""), original=_original_start(item),
-            done=p.get(P_DONE) == "1", text_color=p.get(P_COLOR, ""), order=order,
-            line=p.get(P_LINE) == "1", alarm=p.get(P_ALARM, ""), countdown=p.get(P_COUNTDOWN, ""),
-            popup_minutes=popups, writable=cal["writable"],
+            **_props_values(p), popup_minutes=popups, writable=cal["writable"],
             response=response, organizer=(organizer.get("displayName") or organizer.get("email", "")) if response else "",
         )
 
@@ -581,6 +595,7 @@ class GCal:
             except HttpError as e:
                 if is_transient(e):  # 표시는 덤이라 거절되면 넘어가고, 일시 장애면 다시 보낸다
                     raise
+                log.warning("'이번 및 이후': 뒤쪽 회차의 완료 표시·옮긴 날짜를 옮기지 못함: %s", e)
             try:
                 self._end_series_before(ev, master)
             except HttpError as e:
@@ -636,10 +651,12 @@ class GCal:
         return rule[:m.start(1)] + str(max(1, int(m.group(1)) - used)) + rule[m.end(1):]
 
     def _later_exceptions(self, ev, master, v):
-        """'이번과 이후'로 새로 만들 뒤쪽 반복에 옮겨 줄 예전 반복의 예외 → (EXDATE 줄 목록, [(새 회차 자리, 속성)])
+        """'이번과 이후'로 새로 만들 뒤쪽 반복에 옮겨 줄 예전 반복의 예외
+        → (EXDATE 줄 목록, [(새 회차 자리, 다시 둘 속성, 옮겨 둔 start·end 또는 None)])
         - 지운 회차: 새 반복에서도 빠지게 EXDATE로
-        - 회차마다 따로 둔 완료·글자색: 새 반복의 같은 회차에 다시 표시(_mark_instances)
-        회차 자리는 이 회차를 v의 시작으로 옮긴 만큼 함께 옮긴다. 너무 먼 미래(2년 뒤)까지는 보지 않는다."""
+        - 회차마다 따로 둔 완료·글자색, 다른 날·시각으로 옮긴 회차: 새 반복의 같은 회차를 다시 고친다(_mark_instances)
+        회차 자리는 이 회차를 v의 시작으로 옮긴 만큼 함께 옮기고, 옮긴 회차는 옮겨 둔 날·시각 그대로 둔다.
+        구글은 실제 시각으로 회차를 고르므로 이 회차 앞으로 옮긴 뒤쪽 회차도 찾게 앞뒤 2년을 본다."""
         slot = ev.slot
         if v["all_day"] == isinstance(slot, datetime):  # 종일 ↔ 시간 일정으로 바꿨으면 회차 자리가 맞지 않는다
             return [], []
@@ -648,7 +665,7 @@ class GCal:
         svc, page, exdates, marks = self._service(), None, [], []
         while True:
             r = self._call(svc.events().instances(
-                calendarId=ev.calendar_id, eventId=ev.recurring_event_id, timeMin=_when(slot),
+                calendarId=ev.calendar_id, eventId=ev.recurring_event_id, timeMin=_when(slot - timedelta(days=730)),
                 timeMax=_when(slot + timedelta(days=730)), showDeleted=True, pageToken=page, maxResults=2500))
             for it in r.get("items", []):
                 o = _original_start(it)
@@ -659,8 +676,12 @@ class GCal:
                     continue
                 p = it.get("extendedProperties", {}).get("private", {})
                 diff = {k: p.get(k, "") for k in (P_DONE, P_COLOR) if p.get(k, "") != base.get(k, "")}
-                if diff:
-                    marks.append((o + shift, diff))
+                times = None
+                if _when_value(it.get("start") or {}) not in (None, o):
+                    times = {k: {kk: vv for kk, vv in it[k].items() if kk in ("date", "dateTime", "timeZone")}
+                             for k in ("start", "end")}
+                if diff or times:
+                    marks.append((o + shift, diff, times))
             page = r.get("nextPageToken")
             if not page:
                 break
@@ -671,10 +692,10 @@ class GCal:
         return ["EXDATE;VALUE=DATE:" + ",".join(d.strftime("%Y%m%d") for d in exdates)], marks
 
     def _mark_instances(self, v, new_id, marks):
-        """새 반복(new_id)의 회차들에 예전 회차의 완료·글자색을 다시 표시한다(다시 보내도 같은 결과)."""
+        """새 반복(new_id)의 회차들에 예전 회차의 완료·글자색·옮긴 날짜를 다시 둔다(다시 보내도 같은 결과)."""
         if not marks:
             return
-        want = dict(marks)
+        want = {o: (diff, times) for o, diff, times in marks}
         props = event_props(v)
         svc, page, reqs = self._service(), None, []
         while True:
@@ -684,8 +705,9 @@ class GCal:
             for it in r.get("items", []):
                 o = _original_start(it)
                 if o in want:
-                    reqs.append(svc.events().patch(calendarId=v["calendar_id"], eventId=it["id"], body={
-                        "extendedProperties": {"private": dict(props, **want[o])}}))
+                    diff, times = want[o]
+                    body = dict(times or {}, extendedProperties={"private": dict(props, **diff)})
+                    reqs.append(svc.events().patch(calendarId=v["calendar_id"], eventId=it["id"], body=body))
             page = r.get("nextPageToken")
             if not page:
                 break

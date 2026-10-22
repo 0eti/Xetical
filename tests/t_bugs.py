@@ -410,4 +410,149 @@ for bad in ("{year.x}", "{year[0]}", "{year:%Y}", "{"):
 a.cfg["title_format"] = C.DEFAULTS["title_format"]
 w.grab()
 
+# ================================================================ 리뷰(2026-10-22)에서 고친 것
+# ---------- R1: 매일 반복 + '하루 전·당일' 알림은 같은 시각이어도 두 회차 다 띄움 ----------
+a.store.events = [Event(f"rm_{d:%Y%m%d}", "me", "약 먹기", d, d + timedelta(days=1), True, alarm=f"{hm}|1,0",
+                        recurring=True, recurring_event_id="rm") for d in (T, T + timedelta(days=1))]
+a.reminders.fired = set()
+a.reminders.check()
+check("R1 매일 반복의 당일 알림과 다음 회차의 하루 전 알림이 둘 다 뜸", len(a.reminders.popups) == 2,
+      len(a.reminders.popups))
+
+# ---------- R4: 아래쪽 알림 창을 닫으면 새 창은 그 빈자리에 ----------
+bottom = next(p_ for p_ in a.reminders.popups if p_.stack_index == 0)
+bottom.close()
+QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+a.store.events.append(Event("al3", "me", "새 알림", T, T + timedelta(days=1), True, alarm=f"{hm}|0"))
+a.reminders.check()
+check("R4 새 알림 창은 남은 창과 겹치지 않음", sorted(p_.stack_index for p_ in a.reminders.popups) == [0, 1],
+      [p_.stack_index for p_ in a.reminders.popups])
+for p_ in list(a.reminders.popups):
+    p_.close()
+QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+a.store.events = []
+a.store.reindex()
+
+# ---------- R2: '이번 및 이후'에서 뒤쪽의 옮긴 회차는 옮긴 날짜 그대로 ----------
+g, svc = fresh()
+svc.master["extendedProperties"] = {"private": {}}
+FRI = S0 + 2 * WEEK + timedelta(days=4)
+EARLY = S0 - timedelta(days=1)  # 넷째 주 회차를 이 회차 앞으로 옮김
+
+
+def moved_instances(kw):
+    if kw["eventId"] == "m1":
+        return [{"id": "f", "status": "confirmed", "originalStartTime": {"dateTime": iso(S0 + 2 * WEEK)},
+                 "start": {"dateTime": iso(FRI), "timeZone": "Asia/Seoul"},
+                 "end": {"dateTime": iso(FRI + timedelta(hours=1)), "timeZone": "Asia/Seoul"}},
+                {"id": "e", "status": "confirmed", "originalStartTime": {"dateTime": iso(S0 + 3 * WEEK)},
+                 "start": {"dateTime": iso(EARLY)}, "end": {"dateTime": iso(EARLY + timedelta(hours=1))},
+                 "extendedProperties": {"private": {"xeticalDone": "1"}}},
+                {"id": "u", "status": "confirmed", "originalStartTime": {"dateTime": iso(S0 + WEEK)},
+                 "start": {"dateTime": iso(S0 + WEEK)}, "end": {"dateTime": iso(S0 + WEEK + timedelta(hours=1))}}]
+    return [{"id": f"{kw['eventId']}_n{i}", "originalStartTime": {"dateTime": iso(S0 + i * WEEK)}} for i in range(4)]
+
+
+svc.instances = moved_instances
+g.update_event(inst(), vals(title="수영"), "following")
+patches = {kw["eventId"].rsplit("_", 1)[1]: kw["body"] for kw in svc.calls("events.patch") if "_n" in kw["eventId"]}
+n2, n3 = patches.get("n2"), patches.get("n3")
+check("R2 금요일로 옮긴 뒤쪽 회차는 새 반복에서도 금요일", n2 and n2["start"] == {
+    "dateTime": iso(FRI), "timeZone": "Asia/Seoul"} and n2["end"]["dateTime"] == iso(FRI + timedelta(hours=1)), patches)
+check("R2 이 회차 앞으로 옮긴 뒤쪽 회차도 찾아 옮긴 날짜·완료 표시를 그대로",
+      n3 and n3["start"] == {"dateTime": iso(EARLY)} and private(n3).get("xeticalDone") == "1", patches)
+check("R2 안 옮기고 안 고친 회차는 건드리지 않음", len(patches) == 2, list(patches))
+first_q = svc.calls("events.instances")[0]
+check("R2 예전 반복은 이 회차 앞쪽도 함께 봄", first_q["timeMin"] < iso(S0), first_q["timeMin"])
+
+# ---------- R5: 회차 표시가 거절돼도 넘어가되 기록은 남김 ----------
+from googleapiclient.errors import HttpError
+import logging
+
+
+class Resp(dict):
+    status = 403
+    reason = "Forbidden"
+
+
+g, svc = fresh()
+svc.master["extendedProperties"] = {"private": {}}
+svc.instances = moved_instances
+orig_handle = svc.handle
+
+
+def refuse_patch(kind, kw):
+    if kind == "events.patch" and "_n" in kw["eventId"]:
+        svc.log.append((kind, kw))
+        raise HttpError(Resp(), b"{}")
+    return orig_handle(kind, kw)
+
+
+svc.handle = refuse_patch
+records = []
+handler = logging.Handler()
+handler.emit = records.append
+logging.getLogger("xetical").addHandler(handler)
+try:
+    g.update_event(inst(), vals(title="수영"), "following")
+    err = None
+except Exception as e:  # noqa: BLE001
+    err = e
+logging.getLogger("xetical").removeHandler(handler)
+check("R5 회차 표시가 거절돼도 '이번 및 이후'는 끝까지(앞쪽 자르기)", err is None and any(
+    kw["eventId"] == "m1" for kw in svc.calls("events.patch")), err)
+check("R5 거절된 것은 로그에 남김", any("옮기지 못함" in r_.getMessage() for r_ in records), records)
+
+# ---------- R7: 오래된 카운트다운은 동기화마다 다시 받지 않음(고치면 다시 받음) ----------
+g, svc = fresh()
+svc.lists = old_countdowns
+
+
+def old_queries():
+    return len([kw for kw in svc.calls("events.list") if kw.get("singleEvents") is False])
+
+
+g.fetch_all(T, T + timedelta(days=30), False)
+cds = g.fetch_all(T, T + timedelta(days=30), False)[4]
+check("R7 두 번째 동기화는 오래된 카운트다운을 다시 받지 않음(목록은 그대로)",
+      old_queries() == 1 and [e.id for e in cds] == ["love"], (old_queries(), [e.id for e in cds]))
+g._call(svc.events().patch(calendarId="me", eventId="love", body={}))
+g.fetch_all(T, T + timedelta(days=30), False)
+check("R7 무언가 고친 뒤에는 다시 받음", old_queries() == 2, old_queries())
+
+# ---------- R3: 31일에서 28일로 옮긴 매월 할 일은 2월 28일 뒤에도 28일 ----------
+a.cfg["task_repeats"] = {"L1|월세": "monthly"}
+a.store.set(CALS, [task("x", date(2026, 12, 31), True), task("y", date(2027, 1, 28), True),
+                   task("z", date(2027, 2, 28))], {}, (date(2026, 12, 1), date(2027, 6, 1)))
+a._project_task_repeats()
+proj = sorted(e.first_day for e in a.store.events if e.virtual)[:2]
+check("R3 예전 31일 기록이 있어도 바로 앞 회차(28일)를 따름", proj == [date(2027, 3, 28), date(2027, 4, 28)], proj)
+a.store.set(CALS, [task("a", date(2027, 1, 31), True), task("b", date(2027, 2, 28))], {},
+            (date(2026, 12, 1), date(2027, 6, 1)))
+a._project_task_repeats()
+proj = sorted(e.first_day for e in a.store.events if e.virtual)[:1]
+check("R3 말일로 당겨진 31일 회차 뒤는 여전히 31일", proj == [date(2027, 3, 31)], proj)
+a.cfg["task_repeats"] = {}
+a.store.set(CALS, [], {}, (T - timedelta(days=60), T + timedelta(days=90)))
+
+# ---------- R6: 칸 편집기에서 공백만 고쳐도 이름 바꾸기로 저장 ----------
+a.store.events += [Event("ws", "me", "회의 준비", D2, D2 + timedelta(days=1), True)]
+a.store.reindex()
+ed = CellEditor(a.cfg, a.store, D2, QRect(0, 0, 160, 120), "me", [])
+c = ed.edit.textCursor()
+c.movePosition(QTextCursor.Start)
+c.movePosition(QTextCursor.Right, n=2)
+c.insertText(" ")
+ops, lines, ask = ed.collect()
+check("R6 겹친 공백을 넣은 것도 저장", [op[3].get("summary") for op in ops if op[0] == "patch"] == ["회의  준비"], ops)
+ed.close()
+a.store.events = []
+a.store.reindex()
+
+# ---------- R9: 설정 가져오기는 시각과 상관없이 같은 트래커를 백업 쪽으로 ----------
+a.cfg["mood_trackers"] = [{"id": "mood", "name": "기분", "colors": [], "t": time.time() + 86400}]
+a.import_settings_file(str(path))
+names = {t["id"]: t["name"] for t in a.cfg["mood_trackers"]}
+check("R9 이 PC 트래커의 바꾼 시각이 더 나중이어도 백업 쪽", names == {"mood": "기분(백업)"}, names)
+
 print(f"\n{sum(ok for _, ok in results)}/{len(results)} 통과")

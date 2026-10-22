@@ -25,6 +25,7 @@ def alarm_times(ev):
 class ReminderPopup(QWidget):
     def __init__(self, ev, when, on_open, stack_index):
         super().__init__(None, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.stack_index = stack_index
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.setStyleSheet("""
@@ -161,19 +162,23 @@ class Reminders(QObject):
 
     def _key_id(self, ev):
         """띄운 알림을 기억하는 이름. 새 일정은 임시 id(tmp-…)로 먼저 보이다가 동기화 뒤 진짜 id로 바뀌므로
-        진짜 id로 맞춘다. 반복 일정은 회차 id 대신 원본 id를 쓴다(알림 시각이 회차를 가른다):
-        임시로 그린 회차(tmp-…_날짜)와 구글에서 받은 회차의 id 모양이 달라도 같은 알림으로 친다."""
+        진짜 id로 맞춘다. 반복 일정은 회차 id 대신 원본 id + 회차의 원래 자리를 쓴다:
+        임시로 그린 회차(tmp-…_날짜)와 구글에서 받은 회차의 id 모양이 달라도 같은 알림으로 치고,
+        매일 반복에 '하루 전·당일' 알림처럼 두 회차의 알림 시각이 같아도 둘 다 띄운다."""
         base = ev.recurring_event_id or ev.id
         if base.startswith("tmp-"):
             base = base.split("_", 1)[0]
-        return self.app.outbox.real_id(base)
+        key = self.app.outbox.real_id(base)
+        return f"{key}@{ev.slot:%Y%m%d%H%M}" if ev.recurring else key
 
     def _show(self, ev):
         if ev.all_day:
             when = f"{ev.first_day:%m월 %d일} (하루 종일)"
         else:
             when = f"{ev.start:%m월 %d일 %H:%M} ~ {ev.end:%H:%M}"
-        popup = ReminderPopup(ev, when, self.app.edit_event, len(self.popups))
+        # 비어 있는 가장 아래 자리에 쌓는다(앞 창을 닫았는데 개수로 정하면 남은 창 위에 겹친다)
+        used = {p.stack_index for p in self.popups}
+        popup = ReminderPopup(ev, when, self.app.edit_event, next(i for i in range(len(used) + 1) if i not in used))
         self.popups.append(popup)
         # 닫으면 창이 지워진다(WA_DeleteOnClose). 목록에 남겨 두면 다음 알림 때 지워진 창을 건드려 알림이 멈춘다.
         popup.destroyed.connect(lambda *_, p=popup: setattr(self, "popups", [q for q in self.popups if q is not p]))

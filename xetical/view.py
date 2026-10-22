@@ -762,10 +762,8 @@ class CalendarWindow(QWidget):
 
     def countdown_text(self, ev):
         kind = ev.countdown_parts()[0]
-        days = (ev.first_day - date.today()).days
-        # 'N일 경과' 형식이어도 아직 오지 않은 날은 남은 날로 센다(형식은 어느 회차를 보일지만 정한다)
-        when = f"{-days}일 경과" if days < 0 else "오늘" if days == 0 else f"{days}일 남음"
-        return f"[{COUNTDOWN_TYPES.get(kind, '카운트다운')}] {ev.title} {when}"
+        num, unit = ev.countdown_label()
+        return f"[{COUNTDOWN_TYPES.get(kind, '카운트다운')}] {ev.title} {num}{unit}"
 
     def _paint_countdown_bar(self, p, L):
         s, m = L["s"], L["m"]

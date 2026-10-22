@@ -45,14 +45,22 @@ class TaskMixin:
 
     def _anchor_day(self, ev, rule):
         """월·연 반복의 원래 날짜. 31일 회차가 2월 28일로 당겨졌으면 예전 회차에서 31을 찾아 다음 회차를 다시 31일로
-        (안 그러면 3/28·4/28…로 계속 밀린다). 달의 마지막 날이 아니면 그 날짜 그대로."""
+        (안 그러면 3/28·4/28…로 계속 밀린다). 달의 마지막 날이 아니면 그 날짜 그대로.
+        바로 앞 회차부터 거슬러 보다가 말일이 아닌 회차(당겨지지 않은 진짜 날짜)를 만나면 멈춘다
+        (예전에 31일이었다가 28일로 옮긴 할 일이 2월 28일 뒤 다시 31일로 가지 않게)."""
         if rule not in ("monthly", "yearly"):
             return None
         d = ev.first_day
-        if d.day != pycal.monthrange(d.year, d.month)[1]:
-            return d.day
-        return max([e.first_day.day for e in self._series(ev)
-                    if rule == "monthly" or e.first_day.month == d.month] + [d.day])
+        day = d.day
+        if day != pycal.monthrange(d.year, d.month)[1]:
+            return day
+        before = sorted((e.first_day for e in self._series(ev)
+                         if e.first_day < d and (rule == "monthly" or e.first_day.month == d.month)), reverse=True)
+        for x in before:
+            day = max(day, x.day)
+            if x.day != pycal.monthrange(x.year, x.month)[1]:
+                break
+        return day
 
     def _create_next_occurrence(self, ev):
         """반복 할 일의 다음 회차를 진짜 할 일로 만든다. 이미 그 날짜(또는 그 뒤) 회차가 있으면 만들지 않는다.

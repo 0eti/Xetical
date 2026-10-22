@@ -311,14 +311,14 @@ class CellEditor(QWidget):
         # 제목순으로 다시 섞인다). 열었다 닫기만 했으면 구글에 쓰지 않는다.
         changed = [ln["ev"].id if ln["ev"] else None for ln in lines] != [e.id for e in self.line_events] or any(
             (ln["ev"].done, ln["ev"].text_color or "", line_text(ln["ev"].title))
-            != (ln["done"], ln["color"], line_text(ln["text"]))
+            != (ln["done"], ln["color"], ln["text"])
             for ln in lines if ln["ev"])
         for i, ln in enumerate(lines):
             ev = ln["ev"]
             props = {"done": ln["done"], "text_color": ln["color"], "order": i if changed or not ev else ev.order,
                      "line": True}
             if ev:
-                renamed = line_text(ev.title) != line_text(ln["text"])
+                renamed = line_text(ev.title) != ln["text"]  # 열었을 때 보인 글자와 비교(공백만 고친 것도 이름 바꾸기)
                 if ev.recurring and renamed:  # 반복 일정 이름 바꾸기는 범위를 묻는다
                     ask.append(("rename", ev, ln["text"]))
                 own = (ev.done, ev.text_color or "") != (ln["done"], ln["color"]) or (renamed and not ev.recurring)

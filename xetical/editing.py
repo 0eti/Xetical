@@ -109,7 +109,7 @@ class EditMixin:
             ev = ln["ev"]
             if ev and ev.id in live:
                 e = live[ev.id]
-                if line_text(e.title) != line_text(ln["text"]):  # 안 바꾼 제목은 원래 글자(줄바꿈·공백) 그대로
+                if line_text(e.title) != ln["text"]:  # 안 바꾼 제목은 원래 글자(줄바꿈·공백) 그대로
                     e.title = ln["text"]
                 e.done, e.text_color, e.order = ln["done"], ln["color"], i
         it = iter(tmps)
