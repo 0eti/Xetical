@@ -85,17 +85,29 @@ class TaskMixin:
         self.outbox.add(op, *before, v, tmps=[tmp], label="새 반복 할 일")
         return ev
 
-    def _open_todo_dialog(self, ev, rrule):
-        """반복 할 일의 '할 일 수정' 창(일정 창 대신). rrule: 구글에서 읽어 온 반복 규칙."""
-        dlg = TaskDialog(self.task_lists(), event=ev, repeat=rule_of(rrule, ev.first_day) or "keep", todo=True)
-        dlg.accepted.connect(lambda: self._save_todo(ev, rrule, dlg))
+    def _open_todo_dialog(self, ev, rrule, base=None):
+        """반복 할 일의 '할 일 수정' 창(일정 창 대신). rrule: 구글에서 읽어 온 반복 규칙, base: 반복의 첫 날짜
+        (규칙은 첫 날짜로 알아본다. 31일 반복의 2/28 회차처럼 말일로 당겨진 회차로는 '매월'인지 알 수 없다)."""
+        base = base or ev.first_day
+        dlg = TaskDialog(self.task_lists(), event=ev, repeat=rule_of(rrule, base) or "keep", todo=True)
+        dlg.accepted.connect(lambda: self._save_todo(ev, rrule, dlg, base))
         self._keep(dlg)
 
-    def _save_todo(self, ev, rrule, dlg):
-        """완료만 바꾸면 그 회차만(묻지 않음), 반복을 '안 함'으로 바꾸면 이 회차부터 끝내고(묻지 않음),
+    @staticmethod
+    def _todo_text(ev, v):
+        """창의 제목·메모. 창은 제목 앞뒤 공백을 지우고 메모의 \r\n을 \n으로 바꾸므로, 그 차이뿐이면 원래 글자를 쓴다
+        (휴대폰에서 만든 '손톱 깎기 ' 같은 할 일을 완료만 했는데 고친 것으로 보지 않게)."""
+        title = ev.title if v["title"] == (ev.title.strip() or "(제목 없음)") else v["title"]
+        notes = ev.description if v["notes"] == ev.description.replace("\r\n", "\n") else v["notes"]
+        return title, notes
+
+    def _save_todo(self, ev, rrule, dlg, base=None):
+        """완료만 바꾸면 그 회차만(묻지 않음), 반복을 '안 함'으로 바꾸면 확인한 뒤 이 회차부터 끝내고,
         그 밖에 고치거나 지우면 '이번만 / 이번 및 이후 / 모든 회차'를 묻는다(반복을 바꾸면 '이번만'은 없다)."""
         v = dlg.values()
-        old_rule = rule_of(rrule, ev.first_day)  # None = 이 창이 만들지 않은 규칙(휴대폰에서 바꾼 것 등)
+        base = base or ev.first_day
+        old_rule = rule_of(rrule, base)  # None = 이 창이 만들지 않은 규칙(휴대폰에서 바꾼 것 등)
+        title, notes = self._todo_text(ev, v)
         if dlg.action == "delete":
             scope = ask_scope(None, "삭제")
             if not scope:
@@ -104,24 +116,32 @@ class TaskMixin:
                 self._remove_local(ev.id)
             self.outbox.add("delete_event", ev, scope, label="반복 할 일 삭제")
         elif v["repeat"] == "none":  # 반복을 끝낸다: 이 회차부터 뒤는 지우고, 앞 회차는 기록으로 남긴다
+            msg = f"'{ev.title}' 반복을 끝내면 {ev.first_day:%m/%d} 회차부터 뒤는 지워지고 앞 회차는 기록으로 남아요."
+            if (title, notes, v["due"], v["done"]) != (ev.title, ev.description, ev.first_day, ev.done):
+                msg += "\n이 창에서 고친 다른 내용은 저장되지 않아요."  # 고친 회차도 함께 지워진다
+            if not ask_confirm(None, msg + "\n반복을 끝낼까요?", yes="반복 끝내기"):
+                return
             self.outbox.add("delete_event", ev, "following", label="반복 할 일 끝내기")
         else:
             rule_changed = v["repeat"] not in ("keep", old_rule)
             moved = v["due"] != ev.first_day
-            if not rule_changed and not moved and (v["title"], v["notes"]) == (ev.title, ev.description):
+            if not rule_changed and not moved and (title, notes) == (ev.title, ev.description):
                 if v["done"] != ev.done:
                     self._toggle_todo(ev)
                 return
             scope = ask_scope(None, "수정", allow_one=not rule_changed)
             if not scope:
                 return
+            # 새 규칙의 기준 날짜: '모든 회차'는 반복의 첫 날짜(옮긴 만큼 함께), '이번 및 이후'는 이 회차의 새 날짜
+            # (첫 날짜는 그대로인데 규칙만 이 회차 날짜로 만들면 첫 날짜에 엉뚱한 회차가 하나 남는다)
+            rule_day = base + (v["due"] - ev.first_day) if scope == "all" else v["due"]
             if rule_changed:
-                rec = todo_rrule(v["repeat"], v["due"])
+                rec = todo_rrule(v["repeat"], rule_day)
             elif scope != "one" and moved and old_rule:  # 뒤 회차도 새 날짜(요일·날짜)에 맞춘다
-                rec = todo_rrule(old_rule, v["due"])
+                rec = todo_rrule(old_rule, rule_day)
             else:
                 rec = KEEP
-            vals = dict(ev.values(), title=v["title"], description=v["notes"], start=v["due"], end=v["due"],
+            vals = dict(ev.values(), title=title, description=notes, start=v["due"], end=v["due"],
                         done=v["done"], line=False, todo=True, recurrence=rec)
             if scope != "one":  # 완료는 연 회차에만(반복 전체가 완료되지 않게)
                 vals["done"] = ev.done
@@ -142,16 +162,29 @@ class TaskMixin:
         if not cal or not reps:
             return
         today = date.today()
-        moved = 0
-        for key, rule in reps.items():
+        for key, rule in list(reps.items()):
             list_id, _, title = key.partition("|")
             if rule in TODO_RULES and title:
-                self.outbox.add("migrate_repeat", list_id, title, rule, cal, today, label="반복 할 일 옮기기")
-                moved += 1
-        self.cfg["task_repeats"] = {}
+                # 기억은 작업이 끝난 뒤 지운다(_on_outbox_finished). 끝나기 전에 꺼져도 편지함에 남아 이어진다
+                self.outbox.add("migrate_repeat", list_id, title, rule, cal, today, label=f"반복 할 일 옮기기: {title}")
+            else:
+                reps.pop(key)
         self.cfg.save()
-        if moved:
-            self.flash(f"반복 할 일 {moved}개를 구글 캘린더 반복 일정으로 옮겨요")
+
+    def _on_outbox_finished(self, job, created, err):
+        """보낼 편지함이 작업 하나를 끝냄(성공, 또는 거절당해 버림). 옮기기면 기억을 지우고 결과를 알린다
+        (거절당한 것은 편지함이 이미 '저장하지 못한 변경' 창으로 이름을 알렸다)."""
+        if job["op"] != "migrate_repeat":
+            return
+        list_id, title = job["args"][0], job["args"][1]
+        self.cfg["task_repeats"].pop(f"{list_id}|{title}", None)
+        self.cfg.save()
+        if err is not None:
+            return
+        if (created or [None])[0] == "none":
+            self.flash(f"'{title}': 옮길 할 일이 없어 반복 기억만 지웠어요")
+        else:
+            self.flash(f"반복 할 일 '{title}' → 구글 캘린더 반복 일정으로 옮겼어요")
 
     def _open_task_dialog(self, ev):
         dlg = TaskDialog(self.task_lists(), event=ev)

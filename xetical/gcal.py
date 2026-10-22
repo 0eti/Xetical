@@ -902,21 +902,25 @@ class GCal:
 
     def migrate_repeat(self, list_id, title, rule, cal_id, today):
         """예전 반복 할 일(구글에는 지금 회차 할 일 하나, 규칙은 이 PC에만)을 반복 일정으로 옮긴다 → none | exists | created.
-        - 마감일이 가장 늦은 할 일이 미완료면 그 날짜부터 시작하고 그 할 일은 지운다(같은 날 두 번 보이지 않게).
-          완료면 오늘이거나 오늘 뒤인 첫 회차부터 시작하고 할 일은 둔다. 지난 완료 기록은 그대로 둔다.
+        - 마지막으로 완료한 할 일보다 뒤에 미완료 할 일이 있으면 그중 가장 이른 날짜부터 시작하고, 그 미완료 할 일들은
+          모두 지운다(같은 날 두 번 보이지 않게. 예전 방식이 다음 회차를 미리 만들어 두 개일 수 있다).
+          없으면 마지막 할 일 다음의, 오늘이거나 오늘 뒤인 첫 회차부터 시작한다. 완료 기록과 그보다 앞의 미완료는 둔다.
         - 29~31일 매월·2월 29일 매년은 말일로 당겨진 회차에서 원래 날짜를 찾아 규칙에 쓴다(anchor_day).
         - 반복 일정 id는 목록·제목으로 정해 둔다: 다시 보내거나 다른 PC가 먼저 옮겼으면 409로 막히고(만들지 않음),
           그때는 할 일만 정리한다. 다른 목록의 같은 제목·같은 제목의 다른 반복 할 일과는 헷갈리지 않는다."""
         tasks = self.todo_tasks(list_id, title)
         if not tasks:
             return "none"
-        latest = max(tasks, key=lambda e: e.start)
-        anchor = anchor_day(latest.start, [t.start for t in tasks], rule)
-        start = latest.start
-        if latest.done:
-            later = repeat_dates(latest.start, rule, max(today, latest.start) + timedelta(days=800), anchor)
+        last_done = max((t.start for t in tasks if t.done), default=None)
+        pending = sorted((t for t in tasks if not t.done and (last_done is None or t.start > last_done)),
+                         key=lambda e: e.start)
+        ref = pending[0] if pending else max(tasks, key=lambda e: e.start)
+        anchor = anchor_day(ref.start, [t.start for t in tasks], rule)
+        start = ref.start
+        if not pending:
+            later = repeat_dates(ref.start, rule, max(today, ref.start) + timedelta(days=800), anchor)
             start = next((d for d in later if d >= today), today)
-        v = dict(todo_values(title, latest.description, start, rule, cal_id, anchor),
+        v = dict(todo_values(title, ref.description, start, rule, cal_id, anchor),
                  event_id=hashlib.sha1(f"xetical-todo|{list_id}|{title}".encode()).hexdigest())
         try:
             self._call(self._service().events().insert(calendarId=cal_id, body=self._body(v, True)))
@@ -925,8 +929,8 @@ class GCal:
             if e.resp.status != 409:
                 raise
             result = "exists"
-        if not latest.done:
-            self.delete_task(latest)
+        for t in pending:
+            self.delete_task(t)
         return result
 
     def create_task(self, list_id, title, notes, due, done=False):

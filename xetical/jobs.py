@@ -129,6 +129,7 @@ class Outbox(QObject):
     drained = Signal()            # 다 보냄
     blocked = Signal(object)      # 보내지 못하고 멈춤(오류 객체)
     failed = Signal(str, object)  # 한 작업이 거절당해 버림(작업 이름, 오류)
+    finished = Signal(dict, object, object)  # 작업 하나가 끝남(작업, 결과 목록, 오류 — 성공이면 None)
 
     def __init__(self, gcal, worker):
         super().__init__()
@@ -179,7 +180,8 @@ class Outbox(QObject):
 
     def _done(self, job, created, err):
         self.busy = False
-        creates = job["op"].startswith("create") or job["op"] == "apply_ops"
+        # 무언가 만드는 작업(옮기기·할 일을 반복 할 일로 바꾸기 포함)의 404는 캘린더·목록이 없어진 것이라 실패로 알린다
+        creates = job["op"].startswith("create") or job["op"] in ("apply_ops", "migrate_repeat", "task_to_todo")
         if isinstance(err, HttpError) and err.resp.status in (404, 410) and not creates:
             err = None  # 이미 지워졌거나 없는 일정을 고치거나 지우려 한 것 → 할 일이 없으니 성공으로 친다
             # (만들기가 404면 캘린더·목록이 없어진 것이라 실패로 알린다. 칸 편집 묶음에서 고치기·지우기의
@@ -199,6 +201,7 @@ class Outbox(QObject):
                     self.id_map[tmp] = real
         self._save()
         self.changed.emit()
+        self.finished.emit(job, created, err)
         if self.jobs:
             self.process()
         else:

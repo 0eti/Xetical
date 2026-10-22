@@ -1,7 +1,7 @@
 """일정 편집: 칸 편집기, 일정 창, 끌어서 옮기기, 초대 응답, 복사·붙여넣기, 되돌리기.
 App이 상속해서 쓴다(self는 App)."""
 import copy
-from datetime import timedelta
+from datetime import date, timedelta
 
 from PySide6.QtGui import QGuiApplication
 
@@ -188,7 +188,11 @@ class EditMixin:
             self.set_status("반복 일정을 불러오지 못했습니다 (인터넷 연결 확인)")
             return
         self.set_status("")
-        (self._open_todo_dialog if ev.todo else self._open_event_dialog)(ev, res[0])
+        if ev.todo:  # 규칙은 반복의 첫 날짜로 알아본다(res[1] = 원본의 start)
+            first = (res[1] or {}).get("date")
+            self._open_todo_dialog(ev, res[0], date.fromisoformat(first) if first else None)
+        else:
+            self._open_event_dialog(ev, res[0])
 
     def _open_event_dialog(self, ev, rrule):
         dlg = EventDialog(self.store.calendars, event=ev, rrule=rrule, cfg=self.cfg)
@@ -220,7 +224,7 @@ class EditMixin:
     def delete_event(self, ev, confirm=False):
         if ev.task_list:
             return self.delete_task(ev, confirm)
-        if confirm and not ask_confirm(None, f"'{ev.title}' 일정을 삭제할까요?"):
+        if confirm and not ask_confirm(None, f"'{ev.title}' {'할 일' if ev.todo else '일정'}을 삭제할까요?"):
             return
         scope = ask_scope(None, "삭제") if ev.recurring else "one"
         if not scope:

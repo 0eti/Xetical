@@ -175,7 +175,9 @@ check("1 일정 값에 할 일 표시", ev.values()["todo"] is True)
 # ---------------------------------------------------------------- 앱 수준(가짜 구글이 받은 작업을 적어 둔다)
 class FakeG:
     def __init__(self):
-        self.calls, self.rrule = [], ""
+        self.calls, self.rrule, self.rrule_start = [], "", {}
+        self.fail = {}             # 작업 이름 → 그 작업이 낼 오류(한 번)
+        self.migrate_results = {}  # 제목 → migrate_repeat 결과
 
     def __getattr__(self, name):
         def fn(*args):
@@ -188,8 +190,12 @@ class FakeG:
                 return f"task:{args[0]}:new"
             if name == "fetch_all":
                 return CALS, [], {}, (args[0], args[1]), [], "ok"
+            if name in self.fail:
+                raise self.fail.pop(name)
             if name == "get_rrule":
-                return self.rrule, {}
+                return self.rrule, self.rrule_start
+            if name == "migrate_repeat":
+                return self.migrate_results.get(args[1], "created")
             return None
         return fn
 
@@ -381,7 +387,7 @@ a.store.set(CALS, [], {}, RANGE)
 RULE = "RRULE:FREQ=WEEKLY;BYDAY=FR"
 asked, answer = [], ["following"]
 TK.ask_scope = ED.ask_scope = lambda parent, verb, allow_one=True: (asked.append((verb, allow_one)), answer[0])[1]
-ED.ask_confirm = lambda *args, **kw: True
+ED.ask_confirm = TK.ask_confirm = lambda *args, **kw: True
 
 
 def opened(rrule=RULE, ev=None):
@@ -611,5 +617,158 @@ job = a.undo_stack[-1]["jobs"][0]
 check("F4 '이번만' 고치기의 되돌리기는 그 회차를 원래대로", a.undo_stack[-1]["label"] == "반복 할 일 수정"
       and job[0] == "update_event" and job[1][0].title == "발톱 깎기" and job[1][1]["title"] == "손톱 깎기"
       and job[1][2] == "one" and job[1][0].todo, job)
+
+
+# ================================================================ 미뤄 둔 9가지
+import xetical.sync as SY
+
+# ---------- G1: 말일로 당겨진 회차도 반복 칸은 '매월'(반복의 첫 날짜로 알아본다) ----------
+pump(lambda: len(a.outbox) == 0)
+a.store.set(CALS, [], {}, RANGE)
+R31 = todo_rrule("monthly", date(2027, 1, 31))
+a._open_todo_dialog(todo_ev("rm31_20270228", date(2027, 2, 28), "월세"), R31, date(2027, 1, 31))
+check("G1 2/28 회차를 열어도 반복 칸은 '매월'", a._dialogs[-1].repeat.currentData() == "monthly",
+      a._dialogs[-1].repeat.currentData())
+a._dialogs[-1].close()
+fake.rrule, fake.rrule_start = R31, {"date": "2027-01-31"}
+n_dlg = len(a._dialogs)
+a.edit_event(todo_ev("rm31_20270430", date(2027, 4, 30), "월세"))
+pump(lambda: len(a._dialogs) > n_dlg)
+check("G1 칸에서 열 때도 반복의 첫 날짜로 알아봄", a._dialogs[-1].repeat.currentData() == "monthly")
+a._dialogs[-1].close()
+fake.rrule_start = {}
+
+# ---------- G3: 첫 회차가 아닌 회차에서 '모든 회차'로 반복 종류를 바꿔도 이상한 첫 회차가 남지 않음 ----------
+MAR12 = date(2027, 3, 12)  # 1/15(금)에 시작한 매주 반복의 회차
+answer[0] = "all"
+asked.clear()
+a._open_todo_dialog(todo_ev("rt_20270312", MAR12), RULE, FRI)
+dlg = a._dialogs[-1]
+dlg.repeat.setCurrentIndex(dlg.repeat.findData("monthly"))
+save(dlg)
+u = jobs_named("update_event")[-1]
+check("G3 '모든 회차': 새 규칙은 반복의 첫 날짜(1/15) 기준", u[2] == "all"
+      and u[1]["recurrence"] == "RRULE:FREQ=MONTHLY;BYMONTHDAY=15", u[1:])
+answer[0] = "following"
+a._open_todo_dialog(todo_ev("rt_20270312", MAR12), RULE, FRI)
+dlg = a._dialogs[-1]
+dlg.repeat.setCurrentIndex(dlg.repeat.findData("monthly"))
+save(dlg)
+u = jobs_named("update_event")[-1]
+check("G3 '이번 및 이후': 새 규칙은 이 회차 날짜(12일) 기준", u[2] == "following"
+      and u[1]["recurrence"] == "RRULE:FREQ=MONTHLY;BYMONTHDAY=12", u[1:])
+
+# ---------- G4: 휴대폰에서 만든 제목(끝 공백)·메모(\r\n)여도 완료만 바꾸면 묻지 않음 ----------
+n_upd = len(jobs_named("update_event"))
+ws = todo_ev("rt_20270115", FRI, "손톱 깎기 ", description="첫 줄\r\n둘째 줄")
+asked.clear()
+a._open_todo_dialog(ws, RULE, FRI)
+dlg = a._dialogs[-1]
+dlg.done_box.setChecked(True)
+save(dlg)
+check("G4 완료만 바꾸면 묻지 않고 그 회차만(제목·메모는 그대로)", asked == [] and ws.done
+      and len(jobs_named("update_event")) == n_upd, asked)
+
+# ---------- G5: 반복을 '안 함'으로 바꾸면 지워지는 것을 먼저 알리고 물음 ----------
+confirms, confirm_answer = [], [False]
+TK.ask_confirm = lambda parent, text, yes="삭제", no="취소": (confirms.append(text), confirm_answer[0])[1]
+n_del = len(jobs_named("delete_event"))
+a._open_todo_dialog(todo_ev("rt_20270115", FRI), RULE, FRI)
+dlg = a._dialogs[-1]
+dlg.title.setText("발톱 깎기")
+dlg.repeat.setCurrentIndex(dlg.repeat.findData("none"))
+save(dlg)
+check("G5 반복을 끝내기 전에 묻고, 같이 고친 내용은 저장되지 않는다고 알림",
+      len(confirms) == 1 and "저장되지 않아요" in confirms[0] and len(jobs_named("delete_event")) == n_del, confirms)
+confirm_answer[0] = True
+a._open_todo_dialog(todo_ev("rt_20270115", FRI), RULE, FRI)
+dlg = a._dialogs[-1]
+dlg.repeat.setCurrentIndex(dlg.repeat.findData("none"))
+save(dlg)
+d = jobs_named("delete_event")
+check("G5 '끝내기'를 고르면 이 회차부터 끝냄", d[-1][1] == "following" and len(d) == n_del + 1)
+TK.ask_confirm = lambda *args, **kw: True
+
+# ---------- G6: Delete 키 확인 문구 ----------
+texts = []
+ED.ask_confirm = lambda parent, text, *args, **kw: (texts.append(text), True)[1]
+target = todo_ev("rt_20270205", FRI + timedelta(days=21))
+a.store.events.append(target)
+a.win.selected_event = target
+answer[0] = "one"
+a.delete_selected()
+check("G6 반복 할 일은 '할 일을 삭제할까요?'", texts and "'손톱 깎기' 할 일을 삭제할까요?" in texts[-1], texts)
+ED.ask_confirm = lambda *args, **kw: True
+pump(lambda: len(a.outbox) == 0)
+
+# ---------- G7: 지운 설정 키는 설정을 읽을 때 버림 ----------
+saved_path = C.CONFIG_PATH
+C.CONFIG_PATH = SP / "config_legacy.json"
+C.CONFIG_PATH.write_text(json.dumps({"show_task_projection": False, "weeks": 5}), "utf-8")
+cfg2 = C.Config.load()
+C.CONFIG_PATH = saved_path
+check("G7 예전 '반복 할 일 예정 표시' 설정은 버림(다른 값은 그대로)",
+      "show_task_projection" not in cfg2 and cfg2["weeks"] == 5)
+
+# ---------- G9: 미완료 할 일이 여러 개면 가장 이른 것부터, 미완료는 모두 정리 ----------
+g, svc = mig([task_item("oct", date(2026, 10, 26), title="월세"), task_item("nov", date(2026, 11, 26), title="월세")])
+g.migrate_repeat("L1", "월세", "monthly", "me", date(2026, 10, 23))
+b = svc.calls("events.insert")[0]["body"]
+check("G9 미완료 10/26·11/26 → 10/26부터 시작하고 둘 다 지움",
+      b["start"] == {"date": "2026-10-26"} and sorted(deleted(svc)) == ["nov", "oct"], (b["start"], deleted(svc)))
+g, svc = mig([task_item("sep", date(2026, 9, 26), title="월세"), task_item("oct", date(2026, 10, 26), done=True, title="월세")])
+g.migrate_repeat("L1", "월세", "monthly", "me", date(2026, 10, 23))
+b = svc.calls("events.insert")[0]["body"]
+check("G9 마지막 완료(10/26)보다 앞의 미완료(9/26)는 기록으로 두고 다음 회차(11/26)부터",
+      b["start"] == {"date": "2026-11-26"} and deleted(svc) == [], (b["start"], deleted(svc)))
+
+# ---------- G2: 옮기기는 성공한 것만 기억에서 지우고, 결과를 보고 알림 ----------
+flashes = []
+a.flash = lambda text, ms=3000: flashes.append(text)
+a.cfg["task_repeats"] = {"L1|손톱 깎기": "weekly", "L1|월세 납부일": "monthly"}
+fake.migrate_results = {"손톱 깎기": "created", "월세 납부일": "none"}
+a._on_synced((CALS, [], {}, RANGE, [], "ok"), None)
+check("G2 작업을 넣는 순간에는 기억을 지우지 않음", len(a.cfg["task_repeats"]) == 2, a.cfg["task_repeats"])
+pump(lambda: not a.cfg["task_repeats"])
+check("G2 끝난 뒤 기억을 지우고 결과대로 알림", a.cfg["task_repeats"] == {}
+      and any("손톱 깎기" in f and "옮겼어요" in f for f in flashes)
+      and any("월세 납부일" in f and "없어" in f for f in flashes), flashes)
+warned = []
+
+
+class _Box:
+    @staticmethod
+    def warning(parent, title, text):
+        warned.append(text)
+
+
+real_box = SY.QMessageBox
+SY.QMessageBox = _Box
+
+
+class Resp403(dict):
+    status, reason = 403, "Forbidden"
+
+
+class Resp404(dict):
+    status, reason = 404, "Not Found"
+
+
+pump(lambda: len(a.outbox) == 0)
+a.cfg["task_repeats"] = {"L1|손톱 깎기": "weekly"}
+fake.fail["migrate_repeat"] = HttpError(Resp403(), b"{}")
+a._on_synced((CALS, [], {}, RANGE, [], "ok"), None)
+pump(lambda: bool(warned))
+check("G2 거절되면 어느 할 일인지 이름을 넣어 알림", warned and "반복 할 일 옮기기: 손톱 깎기" in warned[-1], warned)
+pump(lambda: len(a.outbox) == 0)
+a.cfg["task_repeats"] = {"L1|월세 납부일": "monthly"}
+fake.fail["migrate_repeat"] = HttpError(Resp404(), b"{}")
+n_warn = len(warned)
+a._on_synced((CALS, [], {}, RANGE, [], "ok"), None)
+pump(lambda: len(warned) > n_warn)
+check("G2 404(목록이 없어짐 등)도 '성공'으로 넘기지 않고 알림", len(warned) > n_warn and "월세 납부일" in warned[-1],
+      warned)
+SY.QMessageBox = real_box
+pump(lambda: len(a.outbox) == 0)
 
 print(f"\n{sum(ok for _, ok in results)}/{len(results)} 통과")

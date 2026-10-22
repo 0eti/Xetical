@@ -265,6 +265,11 @@ try:
       ydays, _ = inst_days(yid, "2025-01-01T00:00:00Z", "2029-01-01T00:00:00Z")
       check("반복 할 일: 2월 29일 매년은 평년 2월 28일",
             ydays == ["2025-02-28", "2026-02-28", "2027-02-28", "2028-02-29"], ydays)
+      from xetical.todos import rule_of
+      rr, master_start = g.get_rrule(Event(f"{mid}_20270131", CAL, "", date(2027, 1, 31), date(2027, 2, 1), True,
+                                           recurring=True, recurring_event_id=mid))
+      check("반복 할 일: 구글이 돌려준 규칙도 '매월'로 알아봄(창의 반복 칸)",
+            rule_of(rr, date.fromisoformat(master_start["date"])) == "monthly", (rr, master_start))
       first = next((x for x in mine()[1] if x.recurring_event_id == mid), None)
       check("반복 할 일: 받으면 할 일로(todo)", first is not None and first.todo and first.first_day == date(2027, 1, 31))
       g.set_event_done(first, True)

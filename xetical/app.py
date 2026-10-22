@@ -144,6 +144,7 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
         self.outbox.drained.connect(self._on_outbox_drained)
         self.outbox.blocked.connect(self._on_outbox_blocked)
         self.outbox.failed.connect(self._on_outbox_failed)
+        self.outbox.finished.connect(self._on_outbox_finished)
 
         self.menu = self._build_menu()
         self.tray = QSystemTrayIcon(app_icon(self._today.day, self.cfg["tray_show_date"]), self)

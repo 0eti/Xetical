@@ -147,7 +147,8 @@ DEFAULTS = {
 }
 
 # 예전 버전 설정 이름 → 새 이름
-_LEGACY = {"font_family": None, "font_size": None, "opacity": None, "mood_trackers_t": None}
+_LEGACY = {"font_family": None, "font_size": None, "opacity": None, "mood_trackers_t": None,
+           "show_task_projection": None}
 
 
 class Config(dict):
