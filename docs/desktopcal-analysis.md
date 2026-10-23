@@ -97,7 +97,7 @@
   - 자동 동기화 간격: 5(VIP) / 15 / 30 / 60분
 - **시간표:** 학기·교시·과목·강의실, 홀/짝 주, 바탕화면 창
 - **AI 작업 플랫폼(MCP):**
-  - `desktopcal-mcp.exe`가 Claude, ChatGPT, Cursor 같은 AI에 달력·일정·메모 읽기/쓰기 도구를 제공한다.
+  - `desktopcal-mcp.exe`가 ChatGPT, Cursor 같은 AI에 달력·일정·메모 읽기/쓰기 도구를 제공한다.
   - 쓰기 요청은 확인을 거친다.
 
 ## 기타

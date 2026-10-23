@@ -86,7 +86,7 @@
   - **프린트 기능은 지웠다(2026-10-22, 사용자 요청).**
   - 3-1·3-2·3-3·3-4·3-6·3-7·3-8, 4-1·4-2·4-3·4-5·4-6·4-7
 - **1-4 exe 완료(v1.2.0, v1.3.0 = 트래커·드라이브 동기화, v1.3.1 = 버그 찾기 12가지 고침, v1.3.2 = 리뷰 두 번에서 나온 20가지 고침, 최신 v1.4.0 = 반복 할 일(구글 캘린더 반복 일정), 2026-10-23):** GitHub Releases에 포터블 zip과 설치 파일(setup.exe)을 올렸다. 만들기: `scripts/build_exe.py`(README 참고).
-  - 설치 프로그램은 `installer/xetical.iss`(Inno Setup 6). Inno Setup은 이 PC에 사용자 범위로 설치돼 있다(`%LOCALAPPDATA%\Programs\Inno Setup 6`, Claude 앱 안에서 설치해서 가상화됐을 수 있음).
+  - 설치 프로그램은 `installer/xetical.iss`(Inno Setup 6). Inno Setup은 이 PC에 사용자 범위로 설치돼 있다(`%LOCALAPPDATA%\Programs\Inno Setup 6`, MSIX 앱 안에서 설치해서 가상화됐을 수 있음).
 - **계획만:** 2-1 빠른 입력, 2-8 종류별 아이콘 → `docs/plans.md`
 - **보류·제외**
   - 2-5 스티커 메모: 사용자가 **별도 프로그램으로** 만들 예정
@@ -98,7 +98,6 @@
   - 표시·☐·하루 상세·아침 요약은 `ev.task_list or ev.todo`로 할 일처럼 다룬다. 열면 '할 일 수정' 창(`_open_todo_dialog`).
   - 29~31일 매월·2월 29일 매년은 `BYSETPOS=-1`로 짧은 달 말일에 온다(`todos.todo_rrule`).
   - 예전 방식(규칙은 `task_repeats`에만, 흐린 '예정')은 지웠다. 남은 `task_repeats`는 첫 동기화 때 `migrate_repeat`로 옮기고 비운다.
-  - 설계·계획: `docs/superpowers/specs/2026-10-23-repeat-todo-design.md`, `docs/superpowers/plans/2026-10-23-repeat-todo.md`
 - **메뉴 정리(2026-10-20, 사용자 요청):** 우클릭 메뉴가 너무 길어서 줄였다.
   - 칸 우클릭: 그날 항목 6개 + 실행 취소 + 설정…(☰ 메뉴를 더 이상 붙이지 않음)
   - 일정 우클릭: 일정 항목 + '이 날짜' 하위 메뉴
@@ -141,13 +140,13 @@
 - 대화상자는 **부모 없는 최상위 창**이어야 한다. 달력의 자식이 되면 바탕화면 아래에 깔린다.
 
 **실행과 시험 환경**
-- Claude 앱은 MSIX 패키지라, 여기서 띄운 자식 프로세스는 HKCU 레지스트리와 AppData 쓰기가 가상화된다. 그래서 **사용자처럼 실행하려면 `explorer.exe "D:\…\Xetical.bat"`로 띄운다.**
+- 작업하는 앱이 MSIX 패키지면, 거기서 띄운 자식 프로세스는 HKCU 레지스트리와 AppData 쓰기가 가상화된다. 그래서 **사용자처럼 실행하려면 `explorer.exe "D:\…\Xetical.bat"`로 띄운다.**
   - 자동 실행 설정도 사용자가 직접 실행한 앱에서 바꿔야 실제로 반영된다.
 - 화면 시험(computer-use)에서 주의할 것
   - `pythonw.exe`는 허용 목록에 없다. 시험할 때는 `.venv\Scripts\python.exe main.pyw`를 `-WindowStyle Hidden`으로 띄운다("Python 3.13 (64-bit)" 허용). 끝나면 explorer로 bat를 다시 실행한다.
   - **`type` 도구는 클립보드로 붙여넣는다.** clipboardWrite 권한이 없을 때 **사용자 클립보드 내용이 일정으로 저장되는 사고**가 있었다(지웠다). 반드시 `write_clipboard` 다음에 `ctrl+v`를 쓰고, 저장 전에 확대해서 확인한다.
   - 클립보드에 링크가 들어가면 사용자 PC의 다운로드 관리자가 반응할 수 있다. 미리 끄게 한다.
-  - Claude 창이 바탕화면을 덮고 있어서 두 번째 클릭이 그쪽으로 갔다. 시험 전에 Xetical을 활성화하고 **Win+D**를 누르면 해결된다.
+  - 다른 창이 바탕화면을 덮고 있어서 두 번째 클릭이 그쪽으로 갔다. 시험 전에 Xetical을 활성화하고 **Win+D**를 누르면 해결된다.
   - 클릭 통과 모드에서는 도구 규칙상 탐색기 위 우클릭과 드래그를 할 수 없다. 우회하지 말 것.
 - 실제 구글 시험은 정리를 반드시 `finally`에서 한다. 404/410은 무시한다.
 

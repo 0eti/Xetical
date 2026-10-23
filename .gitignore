@@ -4,7 +4,6 @@ __pycache__/
 client_secret*.json
 *.log
 *.pyc
-.claude/
 /build/
 /dist/
 /Xetical-*.json

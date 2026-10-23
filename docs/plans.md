@@ -70,7 +70,7 @@ pyinstaller --noconsole --name Xetical --icon assets/xetical.ico ^
 
 **시험:** 문장 → 결과 표를 `tests/test_quickparse.py`에 50개 정도 만들어 둔다. 기준일을 고정한 함수로 테스트한다.
 
-**나중에(선택):** 규칙으로 못 푼 문장만 Claude API에 보내 해석하는 옵션. 기본값은 끄고, API 키는 사용자가 넣는다.
+**나중에(선택):** 규칙으로 못 푼 문장만 외부 AI(LLM) API에 보내 해석하는 옵션. 기본값은 끄고, API 키는 사용자가 넣는다.
 
 ## 2-8. 일정 종류별 아이콘 — 계획만
 
