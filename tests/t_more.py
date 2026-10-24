@@ -187,10 +187,16 @@ for mode in ("rolling", "month", "fixed_row", "rolling_row"):
           "fixed_row": (rows, cols) == (1, 7), "rolling_row": (rows, cols) == (1, 7)}[mode]
     check(f"표시 방식: {mode}", ok and len(w._cells) == rows * cols, (rows, cols))
 a.cfg["display_mode"] = "rolling"
-w.anchor = w.today_anchor()
-before = w.anchor
-w.shift_page(1)
-check("다음 페이지(한 달)", w.anchor.day <= 7 and (w.anchor - before).days > 7)
+# 다음 페이지 = 다음 달 1일이 든 주. 1일이 주 중간이면 그 주는 앞 달에서 시작한다(오늘 날짜와 상관없이 1년 치를 본다)
+bad = []
+for i in range(366):
+    t = date(2026, 1, 1) + timedelta(days=i)
+    w.anchor = before = w.today_anchor(t)
+    w.shift_page(1)
+    first = next((w.anchor + timedelta(days=k) for k in range(7) if (w.anchor + timedelta(days=k)).day == 1), None)
+    if not (first and w.week_first(first) == w.anchor and 7 <= (w.anchor - before).days <= 42):
+        bad.append(t)
+check("다음 페이지(한 달)", not bad, bad[:3])
 w.go_today()
 check("오늘로", w.is_today_page())
 a.cfg["passed_weeks"] = 2
