@@ -156,6 +156,7 @@ class SyncMixin:
             for tracker_id in [t for t in self.moods.days if t not in ids]:  # 지운 트래커의 기록
                 self.moods.drop(tracker_id)
             self.win.update()
+            self._refresh_mood_window()
         if self._mood_again:
             self._mood_again = False
             self.sync_moods()

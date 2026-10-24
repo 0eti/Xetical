@@ -179,6 +179,149 @@ check("월 단위: 12줄 × 31칸", (rows, cols) == (12, 31) and place(date(T.ye
 check("월 단위: 누를 수 있는 칸 = 1월 1일 ~ 오늘", len(w.mood.boxes) == (T - date(T.year, 1, 1)).days + 1)
 check("월 단위: 칸이 달력 창 안에 들어감", all(w.rect().contains(r.toRect()) for r, _ in w.mood.boxes))
 
+# ---------- 위치: 달력 위·아래·왼쪽·오른쪽 ----------
+a.cfg["mood_layout"] = "week"
+n_boxes = (T - date(T.year, 1, 1)).days + 1
+for where in ("bottom", "top", "left", "right"):
+    a.cfg["mood_position"] = where
+    paint()
+    L = w._layout()
+    mr = L["mood"]
+    inside = mr.adjusted(-2, -2, 2, 2)
+    check(f"위치 {where}: 칸이 모두 트래커 자리 안", len(w.mood.boxes) == n_boxes
+          and all(inside.contains(r) for r, _ in w.mood.boxes), (len(w.mood.boxes), mr))
+    check(f"위치 {where}: 달력 칸과 겹치지 않음",
+          all(r.intersected(mr).width() < 0.5 or r.intersected(mr).height() < 0.5 for r, _ in w._cells))
+    check(f"위치 {where}: 창 안에 들어감", all(w.rect().contains(r.toRect()) for r, _ in w.mood.boxes))
+    if where in ("left", "right"):
+        tops = {round(r.top()) for r, _ in w.mood.boxes}
+        lefts = {round(r.left()) for r, _ in w.mood.boxes}
+        check(f"위치 {where}: 세로로 세움(줄이 열보다 많음)", len(tops) > len(lefts) and L["mood_w"] > 0
+              and abs(L["grid"].width() + L["wn_w"] - (L["W"] - L["mood_w"])) < 1, (len(tops), len(lefts)))
+        check(f"위치 {where}: 달력 칸 쪽", (L["grid"].left() >= mr.right() - 0.5) if where == "left"
+              else (L["grid"].right() <= mr.left() + 0.5), (L["grid"], mr))
+    elif where == "top":
+        check("위치 top: 요일 줄이 트래커 바로 아래", abs(L["dow_top"] - mr.bottom()) < 0.5, (L["dow_top"], mr))
+rows_v, cols_v, place_v = w.mood.grid(a.cfg, T.year, vertical=True)
+rows_h, cols_h, place_h = w.mood.grid(a.cfg, T.year)
+check("세로: 줄과 열이 바뀜", (rows_v, cols_v) == (cols_h, rows_h) and place_v(T) == place_h(T)[::-1])
+a.cfg["mood_trackers"].append({"id": "long", "name": "아주아주 긴 트래커 이름", "colors": []})
+a.cfg["mood_position"] = "right"
+paint()
+mr = w._layout()["mood"]
+check("세로: 이름이 길어도 트래커 자리 밖으로 넘치지 않음", all(mr.adjusted(-1, -1, 1, 1).contains(r) for r, _ in w.mood.tabs),
+      [(r, mr) for r, _ in w.mood.tabs])
+check("세로: 이름이 여러 줄로 넘어감", len({round(r.top()) for r, _ in w.mood.tabs}) > 1)
+a.cfg["mood_trackers"].pop()
+
+# ---------- 위치: 따로 떼어 바탕화면에 ----------
+from PySide6.QtCore import QEvent, QPointF, QRectF
+from PySide6.QtGui import QMouseEvent
+import xetical.moodwin as MW
+
+a.cfg["mood_position"] = "float"
+a.cfg["mood_float"] = None
+a.settings_changed("mood_position")
+mw = a.mood_win
+check("따로: 트래커 창이 뜸", mw is not None and mw.isVisible())
+paint()
+check("따로: 달력 안에는 트래커가 없음", w._layout()["mood"] is None and not w.mood.boxes
+      and abs(w._layout()["grid"].height() - grid_off) < 1, w._layout()["grid"].height())
+a.cfg["mood_float"] = [40, 50, 300]
+a._place_mood_window()
+check("따로: 저장한 자리·너비", (mw.x(), mw.y(), mw.width()) == (40, 50, 300), mw.geometry())
+mw.grab()
+frame = QRectF(mw.rect()).adjusted(-1, -1, 1, 1)
+check("따로: 칸이 모두 창 안", len(mw.panel.boxes) == n_boxes and all(frame.contains(r) for r, _ in mw.panel.boxes))
+
+
+def mev(kind, local, glob, button=Qt.LeftButton, buttons=Qt.LeftButton):
+    return QMouseEvent(kind, QPointF(local), QPointF(glob), button, buttons, Qt.NoModifier)
+
+
+box = next(r for r, d in mw.panel.boxes if d == T).center()
+gbox = QPointF(mw.mapToGlobal(box.toPoint()))
+asked.clear()
+w.moodMenuRequested.disconnect()
+mw.menuRequested.disconnect()
+mw.menuRequested.connect(lambda d, pos: asked.append(d))
+mw.mousePressEvent(mev(QEvent.MouseButtonPress, box, gbox))
+mw.mouseReleaseEvent(mev(QEvent.MouseButtonRelease, box, gbox, buttons=Qt.NoButton))
+check("따로: 한 번 클릭으로는 색 고르기가 뜨지 않음", asked == [], asked)
+mw.mouseDoubleClickEvent(mev(QEvent.MouseButtonDblClick, box, gbox))
+check("따로: 더블클릭하면 색 고르기", asked == [T], asked)
+mw.mousePressEvent(mev(QEvent.MouseButtonPress, box, gbox, Qt.RightButton, Qt.RightButton))
+check("따로: 오른쪽 클릭도 색 고르기", asked == [T, T], asked)
+tab = next(r for r, t in mw.panel.tabs if t == "workout").center()
+mw.mousePressEvent(mev(QEvent.MouseButtonPress, tab, mw.mapToGlobal(tab.toPoint())))
+check("따로: 이름을 누르면 트래커가 바뀜", a.cfg["mood_active"] == "workout")
+a.choose_tracker("mood")
+
+
+
+def drag(local, glob, by):
+    mw.mousePressEvent(mev(QEvent.MouseButtonPress, local, glob))
+    mw.mouseMoveEvent(mev(QEvent.MouseMove, local, glob + by, Qt.NoButton))
+    mw.mouseReleaseEvent(mev(QEvent.MouseButtonRelease, local, glob + by, buttons=Qt.NoButton))
+
+
+# 평소에는 끌어도 옮겨지지도, 크기가 바뀌지도 않음
+corner = QPointF(mw.width() - 3, mw.height() - 3)
+drag(box, gbox, QPointF(20, 30))
+drag(corner, QPointF(mw.mapToGlobal(corner.toPoint())), QPointF(100, 0))
+check("따로: 평소에는 끌어도 그대로", mw.geometry().topLeft() == QPoint(40, 50) and mw.width() == 300, mw.geometry())
+
+# '위치 및 크기'에서만 옮기기·크기 바꾸기(칸 위에서 끌어도 옮겨짐)
+a.set_adjusting(True)
+check("따로: '위치 및 크기'를 켜면 트래커 창도 조정 모드", mw.adjusting)
+drag(box, gbox, QPointF(20, 30))
+check("따로: 조정 모드에서 끌면 옮겨짐", (mw.x(), mw.y()) == (60, 80), mw.geometry())
+check("따로: 조정 모드에서는 칸·이름이 눌리지 않음", asked == [T, T] and a.cfg["mood_active"] == "mood", asked)
+mw.mouseDoubleClickEvent(mev(QEvent.MouseButtonDblClick, box, gbox))
+check("따로: 조정 모드에서는 더블클릭해도 색 고르기가 뜨지 않음", asked == [T, T], asked)
+h0 = mw.height()
+corner = QPointF(mw.width() - 3, mw.height() - 3)
+drag(corner, QPointF(mw.mapToGlobal(corner.toPoint())), QPointF(100, 0))
+check("따로: 모서리를 끌면 너비가 바뀌고 높이가 따라옴", mw.width() == 400 and mw.height() > h0, (mw.size(), h0))
+check("따로: 완료 전에는 자리를 저장하지 않음", a.cfg["mood_float"] == [40, 50, 300], a.cfg["mood_float"])
+w.adjustFinished.emit()  # 달력의 '✓ 완료'
+check("따로: 완료하면 조정 모드가 끝나고 자리를 기억", not mw.adjusting and a.cfg["mood_float"] == [60, 80, 400],
+      a.cfg["mood_float"])
+drag(box, QPointF(mw.mapToGlobal(box.toPoint())), QPointF(20, 30))
+check("따로: 완료 뒤에는 다시 끌어도 그대로", (mw.x(), mw.y()) == (60, 80), mw.geometry())
+mw.resize(mw.size_for(10))
+check("따로: 최소 너비", mw.width() == MW.MIN_W)
+a._place_mood_window()
+# 달력 숨기기·다시 보이기
+a.set_calendar_visible(False)
+check("따로: 달력을 숨기면 트래커 창도 숨음", a.mood_win is None)
+a.set_calendar_visible(True)
+check("따로: 다시 보이면 기억한 자리에", a.mood_win is not None and a.mood_win.isVisible()
+      and (a.mood_win.x(), a.mood_win.y(), a.mood_win.width()) == (60, 80, 400), a.mood_win and a.mood_win.geometry())
+a.set_adjusting(True)
+a.mood_win.move(70, 90)
+a.cfg["mood_on"] = False
+a.settings_changed("mood_on")
+check("따로: 조정 도중에 닫혀도 옮긴 자리는 남음", a.cfg["mood_float"] == [70, 90, 400], a.cfg["mood_float"])
+a.cfg["mood_on"] = True
+a.settings_changed("mood_on")
+check("따로: 조정 도중에 새로 뜬 창도 조정 모드", a.mood_win is not None and a.mood_win.adjusting)
+a.set_adjusting(False)
+check("따로: 완료하면 새로 뜬 창도 조정 모드가 끝남", not a.mood_win.adjusting)
+a.mood_win.menuRequested.connect(lambda d, pos: asked.append(d))
+a.set_mood(T, "#00b050")
+check("따로: 칠하면 트래커 창에도 보임", a.moods.get("mood", T) == "#00b050")
+a.undo()
+check("따로: 자리는 설정 백업에 넣지 않음", "mood_float" in C.LOCAL_ONLY_KEYS)
+a.cfg["mood_on"] = False
+a.settings_changed("mood_on")
+check("따로: 트래커를 끄면 창이 사라짐", a.mood_win is None)
+a.cfg["mood_on"] = True
+a.cfg["mood_position"] = "bottom"
+a.settings_changed("mood_position")
+check("따로 → 달력 아래: 창이 사라지고 달력에 다시", a.mood_win is None and w._layout()["mood_h"] > 0)
+w.moodMenuRequested.connect(a.show_mood_menu)
+
 # ---------- 설정 창 ----------
 from xetical.settings import SettingsWindow, TrackerEditor
 s = SettingsWindow(a)

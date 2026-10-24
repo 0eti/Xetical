@@ -597,9 +597,13 @@ class SettingsWindow(QWidget):
     def _page_mood(self):
         p = Page()
         p.section("트래커")
-        p.row("달력 아래 트래커 표시", self.onoff("mood_on"),
+        p.row("트래커 표시", self.onoff("mood_on"),
               hint="올해 365일을 칸으로 보여 줍니다. 오늘과 지난 날 칸을 더블클릭(또는 오른쪽 클릭)해 색을 칠합니다"
                    "(기분, 운동 여부 등). 기록은 이 PC에 저장합니다.")
+        p.row("위치", self.combo("mood_position", [("bottom", "달력 아래"), ("top", "달력 위"), ("left", "달력 왼쪽"),
+                                                 ("right", "달력 오른쪽"), ("float", "따로 떼어 바탕화면에")]),
+              hint="왼쪽·오른쪽에 두면 칸을 세로로 세웁니다(줄과 열이 바뀜). '따로 떼어 바탕화면에'는 달력처럼 "
+                   "☰ → 위치 및 크기에서 끌어 옮기고, 오른쪽 아래 모서리를 끌어 크기를 바꿉니다.")
         p.row("모양", self.combo("mood_layout", [("week", "주 단위 (7줄 × 53주)"), ("month", "월 단위 (12줄 × 31일)")]))
         p.row("1월 1일 위치 (주 단위)", self.combo("mood_week_from", [("jan1", "왼쪽 위부터 차례로"),
                                                                 ("weekday", "요일 줄에 맞춤")]),

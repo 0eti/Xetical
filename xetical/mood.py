@@ -1,4 +1,7 @@
-"""트래커(무드 트래커·운동 체크 등): 달력 창 아래쪽에 올해 365칸을 보여 주고 날마다 색을 칠한다.
+"""트래커(무드 트래커·운동 체크 등): 올해 365칸을 보여 주고 날마다 색을 칠한다.
+
+- 자리(mood_position): 달력 창 위·아래·왼쪽·오른쪽에 붙이거나(왼쪽·오른쪽이면 줄과 열을 바꿔 세로로),
+  따로 떼어 바탕화면 아무 데나 둔다(moodwin.MoodWindow, 끌어서 옮기고 오른쪽 아래 모서리로 크기 조절).
 
 - 칠한 날은 이 PC의 data/moods.json에 둔다: {"version": 2, "days": {트래커 id: {"YYYY-MM-DD": [색, 바꾼 시각]}}}
   지운 날도 [""(빈 색), 바꾼 시각]으로 남겨 둔다(동기화할 때 '지웠다'는 것을 다른 PC에 알리려고).
@@ -138,7 +141,7 @@ def active_tracker(cfg):
 
 
 class MoodPanel:
-    """달력 창 아래쪽 트래커 칸: 크기 계산, 그리기, 눌린 곳 찾기. 그릴 때마다 눌릴 곳(tabs·boxes)을 새로 적는다."""
+    """트래커 칸: 크기 계산, 그리기, 눌린 곳 찾기. 그릴 때마다 눌릴 곳(tabs·boxes)을 새로 적는다."""
 
     def __init__(self):
         self.tabs, self.boxes = [], []   # [(QRectF, 트래커 id)], [(QRectF, date)]
@@ -157,8 +160,14 @@ class MoodPanel:
         jan1 = date(year, 1, 1)
         return jan1 - timedelta(days=(jan1.weekday() - week_start) % 7)
 
-    def grid(self, cfg, year):
-        """(줄 수, 열 수, 날짜 → (줄, 열))"""
+    def grid(self, cfg, year, vertical=False):
+        """(줄 수, 열 수, 날짜 → (줄, 열)). vertical이면 줄과 열을 바꾼다(달력 왼쪽·오른쪽에 세로로 둘 때)."""
+        rows, cols, place = self._grid(cfg, year)
+        if vertical:
+            return cols, rows, lambda d: place(d)[::-1]
+        return rows, cols, place
+
+    def _grid(self, cfg, year):
         if cfg["mood_layout"] == "month":
             return 12, 31, lambda d: (d.month - 1, d.day - 1)
         if cfg["mood_week_from"] == "jan1":  # 1월 1일을 왼쪽 위에 두고 위→아래, 왼→오른쪽으로 7칸씩
@@ -170,17 +179,49 @@ class MoodPanel:
         cols = (date(year, 12, 31) - first).days // 7 + 1
         return 7, cols, lambda d: ((d.weekday() - ws) % 7, (d - first).days // 7)
 
-    def _metrics(self, cfg, width, s, font, year):
-        rows, cols, _ = self.grid(cfg, year)
+    @staticmethod
+    def _tab_rects(cfg, width, s, font):
+        """트래커 이름 자리(왼쪽 위 0,0 기준). 한 줄에 안 들어가면 다음 줄로 넘긴다. → ([(QRectF, 트래커 id)], 이름 줄 높이)"""
         fm = QFontMetrics(font)
         pad = 6 * s
-        box = min((width - 2 * pad) / cols, 15 * s)
-        head = fm.height() + 4 * s  # 트래커 이름 줄(작게). 요일·월 이름과 색 범례는 두지 않는다(날짜는 풍선 도움말로)
-        return {"rows": rows, "cols": cols, "pad": pad, "box": max(box, 3.0), "head": head}
+        line = fm.height() + 4 * s - pad / 2
+        x, y, out = pad, pad / 2, []
+        for t in cfg["mood_trackers"]:
+            w = fm.horizontalAdvance(t["name"]) + 12 * s
+            if out and x + w > width - pad / 2:
+                x, y = pad, y + line
+            out.append((QRectF(x, y, w, line), t["id"]))
+            x += w + 2 * s
+        return out, y + line
 
-    def height(self, cfg, width, s, font, year):
-        k = self._metrics(cfg, width, s, self._small(font), year)
+    def _metrics(self, cfg, width, height, s, font, year, vertical=False, max_box=15):
+        """height가 None이면 너비만 보고 칸 크기를 정한다."""
+        rows, cols, _ = self.grid(cfg, year, vertical)
+        pad = 6 * s
+        tabs, head = self._tab_rects(cfg, width, s, font)  # 트래커 이름 줄(작게). 요일·월 이름과 색 범례는 두지 않는다
+        box = min((width - 2 * pad) / cols, max_box * s)
+        if height is not None:
+            box = min(box, (height - head - 2 * pad) / rows)
+        return {"rows": rows, "cols": cols, "pad": pad, "box": max(box, 3.0), "head": head, "tabs": tabs}
+
+    def height(self, cfg, width, s, font, year, max_box=15):
+        """달력 위·아래(또는 따로 뗀 창)에 가로로 둘 때 높이"""
+        k = self._metrics(cfg, width, None, s, self._small(font), year, max_box=max_box)
         return round(k["head"] + k["rows"] * k["box"] + 2 * k["pad"])
+
+    def width(self, cfg, height, s, font, year):
+        """달력 왼쪽·오른쪽에 세로로 둘 때 너비: 높이에 칸이 꽉 차게. 이름이 줄을 넘기면 칸이 조금 작아진다."""
+        font = self._small(font)
+        rows, cols, _ = self.grid(cfg, year, vertical=True)
+        pad = 6 * s
+        fm = QFontMetrics(font)
+        widest = max((fm.horizontalAdvance(t["name"]) + 12 * s for t in cfg["mood_trackers"]), default=0) + 1.5 * pad
+        width = 0.0
+        for _ in range(3):  # 너비 → 이름 줄 수 → 칸 크기 → 너비. 몇 번이면 자리 잡는다
+            head = self._tab_rects(cfg, width, s, font)[1] if width else QFontMetrics(font).height() + 4 * s
+            box = max(3.0, min((height - head - 2 * pad) / rows, 15 * s))
+            width = max(cols * box + 2 * pad, widest)  # 이름 하나가 칸 너비보다 길어도 달력 쪽으로 넘치지 않게
+        return round(width)
 
     @staticmethod
     def _small(font):
@@ -189,12 +230,12 @@ class MoodPanel:
         return f
 
     # ---------- 그리기 ----------
-    def paint(self, p, rect, cfg, data, today, font, fill, s):
+    def paint(self, p, rect, cfg, data, today, font, fill, s, vertical=False, max_box=15):
+        """vertical: 줄과 열을 바꿔 세로로(달력 왼쪽·오른쪽). max_box: 칸 한 변의 최대 크기(배율 1일 때 px)"""
         self.tabs, self.boxes = [], []
         p.fillRect(rect, fill)
         font = self._small(font)
-        k = self._metrics(cfg, rect.width(), s, font, today.year)
-        fm = QFontMetrics(font)
+        k = self._metrics(cfg, rect.width(), rect.height(), s, font, today.year, vertical, max_box)
         text_color = QColor(cfg["item_font"]["color"])
         dim = QColor(text_color)
         dim.setAlpha(120)
@@ -202,29 +243,28 @@ class MoodPanel:
         tracker = active_tracker(cfg)
 
         # 트래커 이름(누르면 바꿈)
-        x, y, h = rect.left() + k["pad"], rect.top() + k["pad"] / 2, k["head"] - k["pad"] / 2
-        for t in cfg["mood_trackers"]:
-            w = fm.horizontalAdvance(t["name"]) + 12 * s
-            r = QRectF(x, y, w, h)
-            on = tracker is not None and t["id"] == tracker["id"]
+        names = {t["id"]: t["name"] for t in cfg["mood_trackers"]}
+        for r, tracker_id in k["tabs"]:
+            r = r.translated(rect.topLeft())
+            on = tracker is not None and tracker_id == tracker["id"]
             bold = QFont(font)
             bold.setBold(on)
             p.setFont(bold)
             p.setPen(text_color if on else dim)
-            p.drawText(r, Qt.AlignCenter, t["name"])
+            p.drawText(r, Qt.AlignCenter, names[tracker_id])
             if on:
                 p.fillRect(QRectF(r.left() + 4 * s, r.bottom() - 2 * s, r.width() - 8 * s, 2 * s),
                            QColor(cfg["title_button_color"]))
-            self.tabs.append((r, t["id"]))
-            x += w + 2 * s
+            self.tabs.append((r, tracker_id))
         p.setFont(font)
         if tracker is None:
             p.setPen(dim)
-            p.drawText(QRectF(x, y, rect.right() - x, h), Qt.AlignVCenter, "설정 → 트래커에서 트래커를 추가하세요")
+            p.drawText(rect.adjusted(k["pad"], k["pad"] / 2, -k["pad"], 0), Qt.AlignTop | Qt.TextWordWrap,
+                       "설정 → 트래커에서 트래커를 추가하세요")
             return
 
         # 칸
-        rows, cols, place = self.grid(cfg, today.year)
+        rows, cols, place = self.grid(cfg, today.year, vertical)
         box, gap = k["box"], max(1.0, k["box"] * 0.16)
         left = rect.left() + k["pad"]
         top = rect.top() + k["head"]

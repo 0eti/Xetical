@@ -27,6 +27,7 @@ from .hotkeys import Hotkeys
 from .jobs import Outbox, is_offline
 from .model import EventStore
 from .mood import MoodData, active_tracker
+from .moodwin import MoodWindow
 from .mousehook import ClickThrough
 from .reminders import Reminders
 from .sync import SyncMixin
@@ -113,6 +114,7 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
         self.undo_stack = []
         self.clip = None   # 복사한 일정(2-4)
         self.cards = {}
+        self.mood_win = None  # 따로 뗀 트래커 창(MoodWindow)
 
         self.win = CalendarWindow(self.cfg, self.store, self.cell_colors)
         w = self.win
@@ -175,6 +177,7 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
         self._restore_geometry()
         if self.cfg["show_calendar"]:
             self.win.show_on_desktop()
+        self._refresh_mood_window()
         self._apply_click_through()
         self.minute_timer.start()
         self.attach_timer.start()
@@ -205,17 +208,21 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
             self.screen_timer.start()
 
     def _fit_windows(self):
-        """모니터를 빼거나 해상도·배율이 바뀌면 달력과 카드를 화면 안으로 다시 맞춘다."""
+        """모니터를 빼거나 해상도·배율이 바뀌면 달력과 카드·트래커 창을 화면 안으로 다시 맞춘다."""
         if self.win.adjusting:
             return
         self._restore_geometry()
         for card in self.cards.values():
             r = fit_rect(QRect(card.pos(), card.size()))
             card.move(r.topLeft())
+        if self.mood_win is not None:
+            self._place_mood_window()
         self.win.update()
 
     def _ensure_attached(self):
         self.win.ensure_attached()
+        if self.mood_win is not None:
+            self.mood_win.ensure_attached()
         self.click_hook.check()
 
     # ---------- 메뉴 ----------
@@ -372,6 +379,7 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
             if was_current:
                 self.win.go_today()
             self._refresh_cards()
+            self._refresh_mood_window()  # 오늘 칸 표시(해가 바뀌면 칸 수도)
         self.win.update()
 
     def _update_icons(self):
@@ -423,6 +431,7 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
             self.win.hide()
         self._apply_click_through()
         self._refresh_cards()
+        self._refresh_mood_window()
 
     def toggle_content(self):
         self._set_cfg("show_content", not self.cfg["show_content"])
@@ -467,6 +476,7 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
                 self.mood_timer.start()
         if self._dayview is not None and self._dayview.isVisible():
             self._dayview.refresh()
+        self._refresh_mood_window()  # 켜기·위치·글꼴·트래커 목록 등
         self.win.update()
 
     def _apply_auto_sync(self):
@@ -502,6 +512,46 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
         self.cfg["mood_active"] = tracker_id
         self.cfg.save()
         self.win.update()
+        self._refresh_mood_window()
+
+    def _refresh_mood_window(self):
+        """따로 뗀 트래커 창: 트래커가 켜져 있고, 위치가 '따로'이고, 달력이 보일 때만 띄운다. 있으면 다시 그린다."""
+        want = self.cfg["mood_on"] and self.cfg["mood_position"] == "float" and self.cfg["show_calendar"]
+        if not want:
+            if self.mood_win is not None:
+                if self.win.adjusting:  # '위치 및 크기' 도중에 닫혀도 옮긴 자리는 남긴다
+                    self._save_mood_window()
+                    self.cfg.save()
+                self.mood_win.close()
+                self.mood_win.deleteLater()
+                self.mood_win = None
+            return
+        if self.mood_win is None:
+            w = self.mood_win = MoodWindow(self.cfg, self.moods)
+            w.trackerChosen.connect(self.choose_tracker)
+            w.menuRequested.connect(self.show_mood_menu)
+            self._place_mood_window()
+            w.set_adjusting(self.win.adjusting)  # '위치 및 크기' 중에 설정에서 따로 떼기로 바꾼 경우
+            w.show_on_desktop()
+        else:
+            self.mood_win.relayout()
+
+    def _place_mood_window(self, rect=None):
+        """rect(없으면 저장한 자리, 처음이면 달력 바로 아래에 달력과 같은 너비)를 화면 안으로 맞춘다."""
+        w, g = self.mood_win, self.cfg["mood_float"]
+        if rect is None and g:
+            rect = QRect(QPoint(g[0], g[1]), w.size_for(g[2]))
+        elif rect is None:
+            cal = self.win.geometry()
+            rect = QRect(QPoint(cal.left(), cal.bottom() + 8), w.size_for(cal.width()))
+        r = fit_rect(rect)
+        w.setGeometry(fit_rect(QRect(r.topLeft(), w.size_for(r.width()))))  # 화면이 좁아 너비가 줄었으면 높이도 다시
+
+    def _save_mood_window(self):
+        """'위치 및 크기'를 마칠 때: 화면 안으로 맞추고 자리를 기억한다(저장은 부르는 쪽에서)."""
+        self._place_mood_window(self.mood_win.geometry())
+        g = self.mood_win.geometry()
+        self.cfg["mood_float"] = [g.x(), g.y(), g.width()]
 
     def show_mood_menu(self, d, pos):
         """트래커 칸을 누름: 지금 트래커의 색 중에서 고른다."""
@@ -531,6 +581,7 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
         if record and old != color:
             self.push_undo("트래커", [], local=lambda: self.set_mood(d, old, tracker_id, record=False))
         self.win.update()
+        self._refresh_mood_window()
 
     def set_cell_color(self, d, color, record=True):
         old = self.cell_colors.get(d.isoformat(), "")
@@ -605,6 +656,7 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
         if isinstance(moods, dict):
             self.moods.restore(moods)
             self.win.update()
+            self._refresh_mood_window()
         return len(values)
 
     def default_calendar(self):
@@ -758,10 +810,15 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
         bring_to_front(self._settings)
 
     def set_adjusting(self, on):
+        """'위치 및 크기': 달력과 따로 뗀 트래커 창을 이때만 옮기고 크기를 바꾼다. '✓ 완료'에서 둘 다 저장."""
         self.win.set_adjusting(on)
+        if self.mood_win is not None:
+            self.mood_win.set_adjusting(on)
         if not on:
             g = self.win.geometry()
             self.cfg["geometry"] = [g.x(), g.y(), g.width(), g.height()]
+            if self.mood_win is not None:
+                self._save_mood_window()
             self.cfg.save()
 
     def shutdown(self):

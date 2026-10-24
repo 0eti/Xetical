@@ -39,6 +39,15 @@ def make_font(spec, scale=1.0, bold=None):
     return f
 
 
+def ui_scale(cfg):
+    """화면 배율: 날짜 글꼴 크기(기본 9pt)에 맞춰 여백·버튼·트래커 칸을 키운다."""
+    return max(0.7, cfg["date_font"]["size"] / 9)
+
+
+def mood_font(cfg):
+    return make_font(cfg["item_font"], 0.8, bold=False)
+
+
 # ---------- 표시 형식(설정 3-3, 4-6) ----------
 def fmt_time(dt, cfg):
     if cfg.get("time_format") == "ampm":
@@ -298,7 +307,7 @@ class CalendarWindow(QWidget):
         return round(7 * self._s()) if self.cfg["shadow"] else 0
 
     def _s(self):
-        return max(0.7, self.cfg["date_font"]["size"] / 9)
+        return ui_scale(self.cfg)
 
     def _layout(self):
         s, m = self._s(), self._margin()
@@ -307,12 +316,24 @@ class CalendarWindow(QWidget):
         header_h = round(40 * s) if show_title else 0
         dow_h = round(22 * s)
         cd_h = round(QFontMetrics(make_font(self.cfg["item_font"], 0.85)).height() + 8 * s) if self._bar_items() else 0
-        mood_h = self.mood.height(self.cfg, W, s, self._mood_font(), date.today().year) if self.cfg["mood_on"] else 0
+        # 트래커: 위·아래면 높이만큼, 왼쪽·오른쪽이면 (제목줄과 카운트다운 바 사이를 다 쓰는 세로 칸) 너비만큼 달력이 줄어든다
+        pos = self.cfg["mood_position"] if self.cfg["mood_on"] else "off"
+        body_h = H - header_h - cd_h
+        mood_h = mood_w = 0
+        if pos in ("left", "right"):
+            mood_w = min(self.mood.width(self.cfg, body_h, s, self._mood_font(), date.today().year), round(W * 0.6))
+        elif pos in ("top", "bottom"):
+            mood_h = self.mood.height(self.cfg, W, s, self._mood_font(), date.today().year)
+        mood = {"top": QRectF(m, m + header_h, W, mood_h), "bottom": QRectF(m, m + H - cd_h - mood_h, W, mood_h),
+                "left": QRectF(m, m + header_h, mood_w, body_h),
+                "right": QRectF(m + W - mood_w, m + header_h, mood_w, body_h)}.get(pos)
+        x0, bw = (m + mood_w if pos == "left" else m), W - mood_w  # 요일 줄·주 번호·칸이 들어가는 가로 범위
+        dow_top = m + header_h + (mood_h if pos == "top" else 0)
         wn_w = round(26 * s) if self.cfg["week_number"] and self.mode != "rolling_row" else 0
         first, rows, cols = self.grid_shape()
-        grid = QRectF(m + wn_w, m + header_h + dow_h, W - wn_w, H - header_h - dow_h - cd_h - mood_h)
+        grid = QRectF(x0 + wn_w, dow_top + dow_h, bw - wn_w, H - header_h - dow_h - cd_h - mood_h)
         return {"s": s, "m": m, "W": W, "H": H, "header_h": header_h, "dow_h": dow_h, "cd_h": cd_h, "wn_w": wn_w,
-                "mood_h": mood_h,
+                "mood_h": mood_h, "mood_w": mood_w, "mood": mood, "x0": x0, "bw": bw, "dow_top": dow_top,
                 "first": first, "rows": rows, "cols": cols, "grid": grid,
                 "cw": grid.width() / cols, "ch": grid.height() / rows}
 
@@ -429,8 +450,8 @@ class CalendarWindow(QWidget):
             self._paint_header(p, L)
 
         # 요일 줄 (+ 주 번호 칸 머리)
-        dow_top = m + L["header_h"]
-        p.fillRect(QRectF(m, dow_top, L["W"], L["dow_h"]), self._bg(base, 0.48))
+        dow_top = L["dow_top"]
+        p.fillRect(QRectF(L["x0"], dow_top, L["bw"], L["dow_h"]), self._bg(base, 0.48))
         date_font = make_font(self.cfg["date_font"])
         p.setFont(make_font(self.cfg["date_font"], bold=False))
         for c in range(L["cols"]):
@@ -442,7 +463,7 @@ class CalendarWindow(QWidget):
                 label = f"{d.month}/{d.day} {weekday_name(d.weekday(), self.cfg, 'short')}"
             p.drawText(r, Qt.AlignCenter, label)
         if L["wn_w"]:
-            p.fillRect(QRectF(m, L["grid"].top(), L["wn_w"], L["grid"].height()), self._bg(base, 0.42))
+            p.fillRect(QRectF(L["x0"], L["grid"].top(), L["wn_w"], L["grid"].height()), self._bg(base, 0.42))
 
         bars = self._row_bars(L)
         bar_h = QFontMetrics(make_font(self.cfg["item_font"], 0.9)).height() + 2 * s
@@ -464,7 +485,7 @@ class CalendarWindow(QWidget):
             lanes = fits.get(i // L["cols"], 0)
             self._paint_cell(p, L, d, cell, today, date_font, lanes * (bar_h + 1 * s), hidden.get(i, 0))
             if L["wn_w"] and i % L["cols"] == 0:
-                wr = QRectF(m, cell.top(), L["wn_w"], cell.height())
+                wr = QRectF(L["x0"], cell.top(), L["wn_w"], cell.height())
                 p.setFont(make_font(self.cfg["date_font"], 0.85, bold=False))
                 p.setPen(QColor(self.cfg["lunar_text"]))
                 p.drawText(wr.adjusted(0, 3 * s, 0, 0), Qt.AlignHCenter | Qt.AlignTop,
@@ -474,10 +495,10 @@ class CalendarWindow(QWidget):
             self._paint_bars(p, L, bars, bar_h, date_font)
         if self.cfg["month_interval"] and self.mode != "month":
             self._paint_month_lines(p, L)
-        if L["mood_h"]:
-            r = QRectF(m, m + L["H"] - L["cd_h"] - L["mood_h"], L["W"], L["mood_h"])
+        if L["mood"] is not None:
             # 배경은 투명(사용자 요청). 완전히 투명한 픽셀은 클릭이 바탕화면으로 빠지므로 1/255만 칠한다.
-            self.mood.paint(p, r, self.cfg, self.moods, date.today(), self._mood_font(), QColor(0, 0, 0, 1), s)
+            self.mood.paint(p, L["mood"], self.cfg, self.moods, date.today(), self._mood_font(), QColor(0, 0, 0, 1), s,
+                            vertical=bool(L["mood_w"]))
         else:
             self.mood.tabs, self.mood.boxes = [], []
         if L["cd_h"]:
@@ -768,7 +789,7 @@ class CalendarWindow(QWidget):
                 p.drawLine(QPointF(r.left(), r.bottom()), QPointF(r.right(), r.bottom()))
 
     def _mood_font(self):
-        return make_font(self.cfg["item_font"], 0.8, bold=False)
+        return mood_font(self.cfg)
 
     def _bar_items(self):
         out = []

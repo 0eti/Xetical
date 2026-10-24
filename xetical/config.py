@@ -38,7 +38,7 @@ README_PATH = BASE_DIR / "README.md"
 APP_VERSION = "1.4.0"
 
 # 설정 백업에서 빼는 항목(이 PC에만 의미가 있는 값)
-LOCAL_ONLY_KEYS = {"geometry", "card_positions", "summary_last", "editor_size", "mood_deleted"}
+LOCAL_ONLY_KEYS = {"geometry", "card_positions", "summary_last", "editor_size", "mood_deleted", "mood_float"}
 
 DEFAULTS = {
     # ── 캘린더 ──
@@ -133,7 +133,9 @@ DEFAULTS = {
     "custom_themes": {},           # 내 테마 {이름: {설정…}}
     # 트래커(무드 트래커 등): 달력 아래 올해 365칸에 날마다 색을 칠한다. 켜면 구글 드라이브로 PC끼리 맞춘다.
     "mood_on": False,
-    "mood_layout": "week",         # week = 7줄×53열, month = 12줄(월)×31칸
+    "mood_position": "bottom",     # 달력에 붙이기: bottom | top | left | right, float = 따로 떼어 바탕화면에
+    "mood_float": None,            # 따로 뗀 트래커 창 [x, y, 너비](높이는 너비에 맞춘다)
+    "mood_layout": "week",        # week = 7줄×53열, month = 12줄(월)×31칸
     "mood_week_from": "jan1",      # 주 단위 배치: jan1 = 1월 1일부터 왼쪽 위에서 차례로, weekday = 줄이 요일
     "mood_trackers": [
         {"id": "mood", "name": "기분", "colors": [
