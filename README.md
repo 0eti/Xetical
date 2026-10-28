@@ -141,7 +141,6 @@ When you are done, your Google events appear on the calendar.
 ## Notes
 
 - Holidays come from Google's "Holidays in South Korea" calendar.
-- Editing or deleting a recurring event changes **only that one date**. Edit the whole series in Google Calendar.
 - If you go offline, the last events received are still shown.
 - Settings, login data, and the event cache are all in the `data` folder. Do not share your login data (`token.json`) with anyone.
 - Error log: `data\xetical.log`
