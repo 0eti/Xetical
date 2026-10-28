@@ -1,5 +1,7 @@
 # Xetical — 구글 캘린더 바탕화면 달력
 
+[English](README.md) | **한국어**
+
 DesktopCal처럼 바탕화면에 박혀 있는 달력인데, 일정은 **구글 캘린더와 양방향 동기화**됩니다.
 
 ## 실행
@@ -142,3 +144,63 @@ DesktopCal처럼 바탕화면에 박혀 있는 달력인데, 일정은 **구글 
 - 설정, 로그인 정보, 일정 캐시는 모두 `data` 폴더에 있습니다. 로그인 정보(`token.json`)는 다른 사람과 공유하지 마세요.
 - 오류 기록: `data\xetical.log`
 - 폴더를 옮겼다면 설정에서 `Windows 시작 시 자동 실행`을 한 번 껐다 켜 주세요. 경로가 갱신됩니다.
+
+## 구조
+
+```mermaid
+flowchart LR
+    subgraph ui["바탕화면 UI (Qt 창)"]
+        direction TB
+        view["<code>view.py</code><br/>달력 창"]
+        edit["<code>editor.py</code> <code>dialogs.py</code><br/><code>dayview.py</code>"]
+        extra["<code>settings.py</code> <code>tools.py</code><br/><code>reminders.py</code> <code>cards.py</code><br/><code>moodwin.py</code>"]
+        view ~~~ edit ~~~ extra
+    end
+
+    subgraph win["Win32 처리"]
+        direction TB
+        desk["<code>desktop.py</code><br/>바탕화면에 박기"]
+        hook["<code>mousehook.py</code><br/>아이콘 클릭 통과"]
+        keys["<code>hotkeys.py</code><br/>전역 단축키"]
+        desk ~~~ hook ~~~ keys
+    end
+
+    subgraph core["App (UI 스레드)"]
+        direction TB
+        main["<code>main.pyw</code>"]
+        app["<code>app.py</code> App<br/>트레이·메뉴·로그인"]
+        mix["<code>sync.py</code> <code>editing.py</code><br/><code>tasks.py</code> (믹스인)"]
+        state["<code>model.py</code> EventStore<br/><code>mood.py</code> 트래커<br/><code>config.py</code> 설정"]
+        main --> app ~~~ mix ~~~ state
+    end
+
+    subgraph net["구글 연동"]
+        direction TB
+        outbox["<code>jobs.py</code> Outbox<br/>보낼 편지함"]
+        worker["작업 스레드<br/>한 번에 하나씩"]
+        gcal["<code>gcal.py</code> GCal<br/>블로킹 API 호출"]
+        outbox --> worker --> gcal
+    end
+
+    subgraph google["구글 API"]
+        direction TB
+        gcalapi(["Calendar API"])
+        tasksapi(["Tasks API"])
+        drive(["Drive 앱 전용 폴더"])
+        gcalapi ~~~ tasksapi ~~~ drive
+    end
+
+    files[("<code>data/</code> 폴더<br/>설정·캐시·보낼 편지함<br/>트래커·로그인 정보")]
+
+    core <-->|"시그널·다시 그리기"| ui
+    ui --> win
+    core -->|"편집·받기·동기화"| net
+    net --> google
+    core -.->|"JSON 파일"| files
+    net -.-> files
+```
+
+- `App`(`app.py`)은 Qt UI 스레드에서 돌며 모든 부분을 엮습니다. `sync.py`, `editing.py`, `tasks.py`는 `App`이 상속하는 믹스인입니다.
+- 구글에 쓰는 변경은 모두 보낼 편지함(`jobs.py`)을 거칩니다. 화면에 먼저 반영하고(새 항목은 임시 id `tmp-N`), `data/outbox.json`에 저장한 뒤 순서대로 보내며, 오프라인이면 다시 시도합니다.
+- `gcal.py`의 호출은 블로킹이라 백그라운드 작업 스레드 하나에서만 실행하고(브라우저 로그인은 따로 된 스레드), 결과는 Qt 시그널로 UI 스레드에 돌려줍니다.
+- 반복 할 일은 구글 캘린더의 하루 종일 반복 일정입니다(`todos.py`). Tasks API에 반복이 없기 때문입니다. 트래커는 `data/moods.json`에 두고, 켜면 드라이브의 앱 전용 숨은 폴더에도 올립니다.
