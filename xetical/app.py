@@ -700,7 +700,7 @@ class App(SyncMixin, EditMixin, TaskMixin, QObject):
         box = QMessageBox(QMessageBox.Information, "Xetical 처음 설정",
                           "구글 캘린더와 연동하려면 Google Cloud에서 만든\n"
                           "'데스크톱 앱' OAuth 클라이언트 파일(client_secret.json)이 필요합니다.\n\n"
-                          "만드는 방법은 설명서(README.md)에 단계별로 적어 두었습니다.")
+                          "만드는 방법은 설명서(README.ko.md)에 단계별로 적어 두었습니다.")
         box.setWindowFlag(Qt.WindowStaysOnTopHint)
         open_btn = box.addButton("파일 선택…", QMessageBox.AcceptRole)
         guide_btn = box.addButton("설명서 열기", QMessageBox.HelpRole)

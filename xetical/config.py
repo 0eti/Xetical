@@ -16,7 +16,7 @@ from pathlib import Path
 
 FROZEN = getattr(sys, "frozen", False)  # PyInstaller로 묶은 exe로 실행 중
 APP_DIR = Path(sys.executable).parent if FROZEN else Path(__file__).resolve().parent.parent  # exe·main.pyw 폴더
-BASE_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR))  # 함께 묶은 파일(README.md 등)이 있는 곳
+BASE_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR))  # 함께 묶은 파일(README.ko.md 등)이 있는 곳
 if FROZEN and not (APP_DIR / "portable.txt").exists():
     DATA_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / "Xetical"
 else:
@@ -33,7 +33,7 @@ FIRED_PATH = DATA_DIR / "fired.json"      # 이미 띄운 알림
 OUTBOX_PATH = DATA_DIR / "outbox.json"    # 아직 구글에 못 보낸 변경(오프라인 대기)
 LOCK_PATH = DATA_DIR / "xetical.lock"
 LOG_PATH = DATA_DIR / "xetical.log"
-README_PATH = BASE_DIR / "README.md"
+README_PATH = BASE_DIR / "README.ko.md"  # 앱에서 여는 한국어 설명서
 
 APP_VERSION = "1.5.0"
 

@@ -52,7 +52,7 @@
 
 **데이터:** `data/` 폴더(포터블). 백업에서 빼는 항목: `config.json`, `token.json`, `client_secret.json`, `cache.json`, `cells.json`, `outbox.json`, `fired.json`, `xetical.log`(회전 1MB×3)
 
-**문서:** `README.md`(사용법), `docs/desktopcal-analysis.md`(DesktopCal 분석), `docs/plans.md`(1-4·2-1·2-8 계획), 이 문서
+**문서:** `README.ko.md`(사용법, 앱이 여는 한국어 설명서)·`README.md`(영어판), `docs/desktopcal-analysis.md`(DesktopCal 분석), `docs/plans.md`(1-4·2-1·2-8 계획), 이 문서
 
 ## 3. 구글 연동 상태
 

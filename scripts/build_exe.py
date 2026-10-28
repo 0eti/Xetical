@@ -89,7 +89,7 @@ def main():
     cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--windowed", "--onedir",
            "--name", "Xetical", "--icon", str(ico),
            "--distpath", str(ROOT / "dist"), "--workpath", str(ROOT / "build"), "--specpath", str(ROOT / "build"),
-           "--add-data", f"{ROOT / 'README.md'}{sep}.",
+           "--add-data", f"{ROOT / 'README.ko.md'}{sep}.",
            # 구글 API 설명 파일은 600개(111MB)가 있지만 Calendar·Tasks·Drive만 쓴다
            "--add-data", f"{docs / 'calendar.v3.json'}{sep}{dest}",
            "--add-data", f"{docs / 'tasks.v1.json'}{sep}{dest}",
@@ -104,7 +104,7 @@ def main():
     (app_dir / "portable.txt").write_text(
         "이 파일이 있으면 Xetical은 설정·로그인 정보를 이 폴더의 data\\ 안에 저장합니다(포터블).\r\n"
         "지우면 %APPDATA%\\Xetical에 저장합니다.\r\n", encoding="utf-8")
-    shutil.copy(ROOT / "README.md", app_dir / "README.md")
+    shutil.copy(ROOT / "README.ko.md", app_dir / "README.ko.md")
 
     zip_path = ROOT / "dist" / f"Xetical-{APP_VERSION}-portable.zip"
     zip_path.unlink(missing_ok=True)
